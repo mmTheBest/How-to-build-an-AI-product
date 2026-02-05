@@ -1,57 +1,62 @@
-# Map the model landscape before you shortlist
+# Map the model landscape prior to shortlisting
 
-## Opening
+## Introduction
 
-Once you have constraints, you need a map. “Best model” is meaningless without context. The landscape includes hosted APIs, open‑source models, and trade‑offs across quality, latency, cost, and operational complexity.
+Given a constraints specification, the next step is to construct a shortlist of candidate models. [Beyer et al., 2016]
+The objective is not to identify a universally “best” model, but to eliminate candidates that are incompatible with latency, cost, reliability, and evidence requirements. [Jain, 1991]
 
-This chapter gives you a fast way to build a shortlist without committing to a stack too early.
+This chapter provides a compact taxonomy of the model landscape and a baseline procedure for shortlisting candidates.
 
-## Core idea: models are a portfolio of trade‑offs
+## 2.1 Primary axes of the model landscape
 
-### Hosted API models
-- **Pros:** fastest to ship, strong baseline quality, no infra setup.
-- **Cons:** per‑request cost, data‑handling constraints, vendor lock‑in risk.
+### 2.1.1 Hosted API models versus self-hosted (open-weight) models
 
-### Open‑source models
-- **Pros:** full control, lower marginal cost at scale, on‑prem options.
-- **Cons:** infra overhead, tuning/serving complexity, quality variance.
+Hosted API models are accessed via commercial providers.
+They typically reduce integration time and eliminate model serving overhead, at the cost of per-request pricing, dependency on external reliability, and constraints on data handling. [Beyer et al., 2016]
 
-### Model size tiers
-- **Small models:** lower cost, faster latency, weaker reasoning.
-- **Large models:** higher quality, higher cost, slower responses.
+Self-hosted (open-weight) models are operated under organizational control.
+They can offer stronger control over data governance and potentially lower marginal cost at scale, but require engineering effort for serving, scaling, observability, and incident response. [Beyer et al., 2016]
 
-## Quick sweep: build a baseline table
+### 2.1.2 Model size tiers and operational consequences
 
-Start with a small dataset (50–100 examples). Score a few candidate models on your core constraints.
+Model size is a coarse proxy for capability, but it is also a proxy for serving cost, latency, and operational complexity.
+Smaller models are typically faster and cheaper to run, but may be less reliable in instruction following and structured tool use under distribution shift.
+Larger models often improve robustness and tool-use reliability, but can violate cost and tail-latency constraints unless mitigated by system design.
+
+For AI agent products, tool-use reliability can become a binding constraint: a single failed tool call can dominate end-to-end failure rates even when free-form answer quality is high.
+
+## 2.2 Baseline sweep procedure (shortlist construction)
+
+A baseline sweep is used to filter clearly incompatible candidates prior to deeper integration.
+
+1. Construct a small evaluation set (e.g., 50–100 prompts) representative of expected product usage.
+2. Define metrics aligned with constraints (e.g., evidence quality, tool-call success rate, p95/p99 latency, and marginal cost).
+3. Evaluate a small portfolio spanning hosted and self-hosted candidates.
+4. Eliminate candidates that violate hard constraints; retain artifacts for later regression testing.
 
 ```python
-# Pseudocode: quick sweep scoring
+# Pseudocode: baseline sweep
 candidates = ["hosted-large", "hosted-mid", "oss-7b"]
 for model in candidates:
-    results = evaluate(model, dataset)
-    print(model, results["approval_rate"], results["p95_latency"], results["cost_per_email"])
+    r = evaluate(model, dataset)
+    print(
+        model,
+        r["claim_support_rate"],
+        r["citation_precision"],
+        r["tool_call_success"],
+        r["p95_latency"],
+        r["cost_per_answer"],
+    )
 ```
 
-You are not picking a winner yet. You are eliminating models that obviously fail.
+## 2.3 Chapter remainder (outline)
 
-## Example: sales email copilot shortlist
+The remainder of this chapter is retained as an outline and will be expanded in later work.
 
-Illustrative baseline on 100 labeled emails:
+- Add a worked RA example of a shortlist table.
+- Add a discussion of common shortlisting failure modes (e.g., benchmark chasing, ignoring tail latency).
+- Add a references-backed discussion of tool-use reliability as a system property.
 
-| Model | Approval rate | p95 latency | Cost/email | Notes |
-|---|---:|---:|---:|---|
-| Hosted large | 78% | 1.9s | $0.07 | quality strong, cost too high |
-| Hosted mid | 70% | 1.1s | $0.03 | meets constraints |
-| OSS 7B | 62% | 2.8s | $0.01 | needs GPU to hit latency |
-
-The sweep narrows the field. In this example, “hosted mid” is the only option that hits all constraints without extra infrastructure.
-
-## Checklist
-- List 3–5 candidate models across hosted + open‑source
-- Run a small baseline eval on real examples
-- Compare against your hard constraints first
-- Keep only the models that pass the first filter
-
-## Takeaway
-
-A quick sweep turns model choice from opinion into evidence. Use it to build a shortlist you can test deeply.
+## References
+- Beyer, B., Jones, C., Petoff, J., & Murphy, N. R. (Eds.). (2016). *Site Reliability Engineering: How Google Runs Production Systems*. O’Reilly Media.
+- Jain, R. (1991). *The Art of Computer Systems Performance Analysis: Techniques for Experimental Design, Measurement, Simulation, and Modeling*. Wiley.

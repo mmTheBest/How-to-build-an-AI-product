@@ -1,53 +1,73 @@
-# Build a selection framework you can defend
+# Define a defensible selection framework
 
-## Opening
+## Introduction
 
-Shortlists reduce options, but you still need a decision. A framework makes your choice explicit, repeatable, and easy to explain to stakeholders.
+Shortlisting reduces the model search space but does not determine a final choice.
+A defensible selection framework makes model choice explicit, repeatable, and auditable, and reduces the risk that selection is driven by subjective demonstrations.
 
-This chapter gives you a simple scoring model you can adapt to any AI product.
+This chapter specifies a minimal decision procedure that combines (i) a hard-constraint filter and (ii) a transparent scoring rule over secondary criteria.
 
-## Core idea: score models against weighted constraints
+## 3.1 Hard constraints as decision gates
 
-### 1) Choose weights
-Pick weights based on what matters most. For a sales email copilot, quality and latency often outrank cost, but cost still matters.
+Hard constraints define feasibility.
+Any candidate violating at least one hard constraint is excluded from further consideration, even if it scores highly on other criteria.
+This “gate first” structure prevents averaging from masking unacceptable failures.
 
-Example weights:
-- Quality: 0.4
-- Latency: 0.3
-- Cost: 0.2
-- Compliance: 0.1
+## 3.2 Weighted scoring among feasible candidates
 
-### 2) Normalize your metrics
-Convert metrics to 0–1 scales so they can be combined.
+Among feasible candidates, a weighted scoring model can be used to encode explicit product priorities.
+The purpose of the scoring model is not mathematical sophistication but transparency and reproducibility.
+
+### 3.2.1 Criteria and weights
+
+Criteria should be derived from the constraint specification.
+For evidence-grounded agent products (including an academic research assistant), evidence quality and tool-use reliability are typically first-order.
+
+Example criteria and weights:
+- Evidence quality: 0.35
+- Tool-use reliability: 0.20
+- Latency: 0.20
+- Cost: 0.15
+- Disambiguation behavior: 0.10
+
+### 3.2.2 Metric normalization
+
+Metrics should be normalized to a comparable 0–1 scale with respect to budgets.
+For budgeted quantities such as latency and cost, a simple normalization is:
 
 ```text
-normalized_latency = 1 - (latency / latency_budget)
-normalized_cost = 1 - (cost / cost_budget)
+normalized_latency = max(0, 1 - (latency / latency_budget))
+normalized_cost    = max(0, 1 - (cost / cost_budget))
 ```
 
-### 3) Compute a weighted score
+Evidence-related metrics (e.g., claim-support rate, citation precision) may already lie in [0, 1] under a defined rubric.
+
+### 3.2.3 Score computation
+
 ```text
-score = 0.4*quality + 0.3*latency + 0.2*cost + 0.1*compliance
+score = Σ_i w_i * metric_i
 ```
 
-The exact math matters less than consistency and transparency.
+The scoring stage should not be used to compensate for violations of hard constraints.
 
-## Example: decision matrix for the copilot
+## 3.3 Decision log and re-evaluation
 
-| Model | Quality | Latency | Cost | Compliance | Weighted score |
-|---|---:|---:|---:|---:|---:|
-| Hosted large | 0.85 | 0.60 | 0.30 | 0.70 | 0.64 |
-| Hosted mid | 0.75 | 0.90 | 0.80 | 0.70 | 0.81 |
-| OSS 7B | 0.60 | 0.40 | 0.90 | 0.90 | 0.62 |
+A selection decision should be recorded in a short decision log that includes:
 
-The hosted mid model wins because it balances quality with speed and cost. The framework makes the trade‑off explicit instead of political.
+- the constraint specification (hard/soft)
+- candidate set
+- evaluation artifacts (inputs, outputs, measurements)
+- the scoring rule and weights
+- the selected model and rationale
 
-## Checklist
-- Define 3–5 decision criteria and weights
-- Normalize metrics using your budgets
-- Score each model using the same rubric
-- Record the decision and the rationale in a short log
+The decision should be revisited when constraints change (e.g., a new cost ceiling) or when model/provider characteristics change.
 
-## Takeaway
+## 3.4 Chapter remainder (outline)
 
-A simple scoring framework turns model choice into an engineering decision, not a debate.
+The remainder of this chapter is retained as an outline and will be expanded in later work.
+
+- Add a worked decision matrix example for the RA.
+- Add guidance for sensitivity analysis (how decisions change with weight changes).
+
+## References (outline)
+- Add books/papers on multi-criteria decision analysis and evaluation methodology.
