@@ -35,7 +35,6 @@ The model selection procedure is then:
 
 This separation is important because averaging criteria can mask violations of requirements that are non-negotiable for the product. [Beyer et al., 2016]
 
-**Concrete RA Constraint Specification.**
 Consider an academic research assistant designed to answer questions about literature. A researcher might ask:
 
 > "What are the main critiques of BERT's tokenization approach in the recent NLP literature?"
@@ -144,8 +143,7 @@ Larger models often improve robustness and tool-use reliability, but can violate
 
 For AI agent products, tool-use reliability can become a binding constraint: a single failed tool call can dominate end-to-end failure rates even when free-form answer quality is high.
 
-**2.1.3 RA-Specific Landscape Considerations.**
-When selecting a model for the RA, the landscape must be filtered by **tool-use reliability** (ability to correctly invoke paper search and PDF parsing tools) and **long-context handling** (processing full-text papers, which can be 8-12k tokens).
+In the example of the RA agent, the landscape must be filtered by **tool-use reliability** (ability to correctly invoke paper search and PDF parsing tools) and **long-context handling** (processing full-text papers, which can be 8-12k tokens).
 
 *Hosted API Models: RA Trade-offs*
 
@@ -211,21 +209,6 @@ A baseline sweep is used to filter clearly incompatible candidates prior to deep
 3. Evaluate a small portfolio spanning hosted and self-hosted candidates.
 4. Eliminate candidates that violate hard constraints; retain artifacts for later regression testing.
 
-```python
-# Pseudocode: baseline sweep
-candidates = ["hosted-large", "hosted-mid", "oss-7b"]
-for model in candidates:
-    r = evaluate(model, dataset)
-    print(
-        model,
-        r["claim_support_rate"],
-        r["citation_precision"],
-        r["tool_call_success"],
-        r["p95_latency"],
-        r["cost_per_answer"],
-    )
-```
-
 **2.2.1 RA Evaluation Harness Design.**
 To perform a baseline sweep for the RA, we need a test harness that simulates real research queries and measures model performance against our constraints.
 
@@ -256,48 +239,7 @@ To perform a baseline sweep for the RA, we need a test harness that simulates re
 
 *Citation Precision (Hard Constraint: ≥0.85):*
 
-```python
-def compute_citation_precision(model_responses, ground_truth):
-    """
-    Compute citation precision across test set.
-    
-    Args:
-        model_responses: List of (question, answer, citations) tuples
-        ground_truth: List of (question, expected_citations) tuples
-    
-    Returns:
-        precision: float in [0, 1]
-    """
-    correct_citations = 0
-    total_citations = 0
-    
-    for (q, answer, model_cites), (_, gt_cites) in zip(model_responses, ground_truth):
-        cited_papers = extract_citations(model_cites)
-        
-        for paper in cited_papers:
-            total_citations += 1
-            if paper in gt_cites and verify_support(answer, paper, q):
-                correct_citations += 1
-    
-    return correct_citations / total_citations if total_citations > 0 else 0.0
-```
-
 *Tool-Call Success Rate (RA-Specific):*
-
-```python
-def compute_tool_call_success(model_traces, expected_tools):
-    """
-    Fraction of queries where model correctly invoked the required tool.
-    """
-    successes = 0
-    
-    for (q, tool_calls) in model_traces:
-        expected = expected_tools.get(q, [])
-        if all(tool in tool_calls for tool in expected):
-            successes += 1
-    
-    return successes / len(model_traces)
-```
 
 **2.2.3 Baseline Sweep Results (RA Example).**
 Running the evaluation harness on Claude 2, GPT-4, and Mixtral 8x7B over 100 test questions:
