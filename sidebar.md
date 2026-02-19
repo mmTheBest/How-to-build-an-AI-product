@@ -4,6 +4,7 @@
   - [1.3 Model landscape](#13-mapping-the-model-landscape)
   - [1.4 Baseline sweep](#14-baseline-sweep-procedure)
   - [1.5 Selection framework](#15-defensible-selection-framework)
+  - [1.6 Failure modes](#16-failure-modes-and-mitigation-strategies)
 - [Chapter 2: Fine-tuning](#chapter-2-fine-tuning)
 - [Chapter 3: Evaluation](#chapter-3-evaluation)
 - [Chapter 4: Agent Architecture](#chapter-4-agent-architecture)

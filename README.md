@@ -307,11 +307,86 @@ A selection decision should be recorded in a short decision log that includes:
 
 The decision should be revisited when constraints change (e.g., a new cost ceiling) or when model/provider characteristics change.
 
-### 1.6 Chapter remainder (outline)
+### 1.6 Failure modes and mitigation strategies
+
+Let \(F\) denote a set of failure modes. For each \(f \in F\), define:
+
+- **Severity** \(S_f\): impact if the failure occurs (user harm, reputational damage, compliance violation).
+- **Frequency** \(P_f\): occurrence rate under the target workload distribution.
+- **Detectability** \(D_f\): probability the system detects the failure before the user relies on the output.
+- **Mitigation cost** \(K_f\): latency, cost, or complexity added by mitigations.
+
+The engineering objective is not to eliminate all failures (which is impossible), but to (i) gate out catastrophic failures via hard constraints, and (ii) reduce expected risk by decreasing \(S_f\) and \(P_f\) while increasing \(D_f\), subject to keeping \(K_f\) within acceptable budgets. [Beyer et al., 2016; Jain, 1991]
+
+#### 1.6.1 RA-specific failure mode taxonomy
+
+For the RA, the dominant failure modes cluster into five categories:
+
+**Evidence failures (trust-critical):**
+- *Fabricated citation:* The cited paper does not exist, or metadata is sufficiently incorrect to prevent lookup.
+- *Misattributed support:* A real paper is cited but does not support the claim as stated.
+- *Overconfident synthesis:* The model merges results across papers and outputs a claim that no single source supports.
+
+**Retrieval failures (coverage-critical):**
+- *Recall failure:* Relevant papers exist but are not retrieved (poor query formulation, weak embedding match, index gaps).
+- *Precision failure:* The retrieved set is mostly irrelevant, consuming context budget and increasing hallucination risk.
+- *Context collapse:* Too many sources lead to shallow summarization or omission of key qualifiers.
+
+**Tool-use failures (pipeline-critical):**
+- *Tool-call formatting failure:* Invalid JSON, schema mismatch, or incorrect arguments.
+- *Tool selection failure:* The model calls the wrong tool (e.g., re-searches instead of parsing the PDF already retrieved).
+- *Agent loop failure:* Repeated tool calls without convergence, causing cost and latency blow-up.
+
+**Robustness and security failures (adversarial):**
+- *Prompt injection via retrieved text:* Malicious instructions embedded in documents are followed by the model.
+- *Data exfiltration:* User prompts cause leakage of secrets via logs or subsequent prompts.
+- *Jailbreak-induced policy bypass:* The model ignores system constraints under adversarial user pressure.
+
+**Operational failures (production-critical):**
+- *Tail latency spikes:* p95/p99 latency violates interactive UX requirements.
+- *Cost instability:* Cost per query grows unpredictably under long-context or looping behavior.
+- *Provider drift:* Hosted model behavior changes without notice, breaking tool reliability or evaluation parity.
+
+#### 1.6.2 Mitigation strategies
+
+In practice, mitigations fall into three categories, each with different implications for model selection:
+
+1. **Prevention by design** (reduce \(P_f\)): Prompt and tool constraints, retrieval filters, agent loop limits.
+2. **Detection and gating** (increase \(D_f\)): Automated checks with "refuse/abstain" behaviors when checks fail.
+3. **Recovery and fallback** (reduce \(S_f\)): Graceful degradation paths and user-visible uncertainty indicators.
+
+The following table maps failure modes to detection signals, mitigations, and model selection implications:
+
+| Failure Mode | Detection Signal | Mitigation | Model Selection Implication |
+|--------------|------------------|------------|----------------------------|
+| Fabricated citation | Citation does not resolve (DOI/arXiv/venue lookup fails) | Existence check + block response | Hard constraint; model must reliably produce resolvable identifiers |
+| Misattributed support | Claim–citation mismatch under rubric | Claim-evidence linking + verifier pass | Strong models reduce verifier load; weak models increase latency/cost |
+| Recall failure | Relevant gold paper absent from top-k | Recall@k evaluation + coverage audits | Model must generate effective retrieval queries |
+| Precision failure | Low fraction of retrieved docs used in answer | RAG utilization metrics | Model must follow "cite only what you read" instruction |
+| Tool-call formatting | Invalid schema or parse errors | JSON schema enforcement + retries | Strong tool-use reliability becomes binding constraint |
+| Agent loop failure | Tool-call count exceeds budget | Step limit + stop conditions + fallback | Better planners reduce cost variance |
+| Prompt injection | Unexpected instruction-following from retrieved text | Treat retrieved text as untrusted; isolate instructions | Stronger instruction hierarchy adherence reduces risk |
+| Tail latency spikes | p95/p99 breaches threshold | Load testing + tracing + circuit breakers | Model/context length must fit SLOs under load |
+| Provider drift | Regressions vs. frozen evaluation set | Canary deployment + shadow evaluation + rollback | Ability to pin versions or tolerate changes matters for hosted choices |
+
+**Key insight for model selection:** Some failures are primarily mitigated by system design (e.g., reranking, caching), while others require intrinsic model behavior (e.g., consistently valid tool calls, calibrated abstention, stable citation formatting). Candidates that require expensive mitigations to reach thresholds are often dominated by models that satisfy constraints natively, even if their average free-form prose quality appears similar. [Beyer et al., 2016]
+
+#### 1.6.3 Making failure modes measurable
+
+Every failure mode should be operationalized into a testable event type with a measurement protocol. [Jain, 1991] For the RA, a minimal failure-mode test suite includes:
+
+- **Citation integrity set:** Existence checks and support verification for a sample of outputs.
+- **Retrieval audit set:** Recall@k measurements against gold paper lists for representative queries.
+- **Tool reliability suite:** Schema correctness rates, correct tool selection rates, and retry success rates.
+- **Adversarial suite:** Prompt injection strings embedded in retrieved text; jailbreak attempt success rates.
+- **Performance suite:** Latency and cost distributions under synthetic load.
+
+These suites should be versioned and retained as regression gates alongside the baseline sweep set. [Beyer et al., 2016]
+
+### 1.7 Chapter remainder (outline)
 
 The remainder of this chapter is intentionally retained as an outline and will be expanded in later work.
 
-- Failure modes and mitigation strategies (outline)
 - Production readiness considerations (outline)
 - Worked decision matrix example for the RA (outline)
 - Sensitivity analysis (outline)
