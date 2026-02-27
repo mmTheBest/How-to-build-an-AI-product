@@ -387,37 +387,97 @@ These suites should be versioned and retained as regression gates alongside the 
 
 The preceding sections established the theoretical apparatus for model selection: constraint specification, landscape mapping, baseline sweeping, and defensible selection.
 This section applies the full procedure to the running example—the academic research assistant—to produce a concrete, auditable decision.
+The intent is not merely to arrive at a model name, but to demonstrate the reasoning chain in sufficient detail that a product manager facing a different AI product could adapt the procedure.
 
 #### 1.7.1 Constraint specification for the RA
 
 The RA's constraints were derived from product requirements through the operationalization procedure described in Section 1.2.
-The final constraint set, after stakeholder negotiation, is reproduced below with the rationale for each threshold. [Keeney & Raiffa, 1993]
+However, the operationalization process itself is rarely straightforward.
+Before presenting the final constraint set, it is instructive to examine the negotiation process that produced it.
 
-**Hard constraints (violation → elimination):**
+**The constraint negotiation process.**
+Initial requirements gathering for the RA yielded statements such as "citations should be accurate," "the system should be fast," and "it shouldn't cost too much."
+These statements are typical of early-stage product requirements: directionally correct but not actionable.
+The operationalization procedure transforms them into measurable targets, but the specific thresholds require negotiation among stakeholders with competing priorities. [Keeney & Raiffa, 1993]
+
+Consider citation precision.
+The research team proposed a threshold of ≥0.95 (only 5% of citations may be incorrect), arguing that academic credibility demands near-perfection.
+The engineering team countered that achieving 0.95 citation precision would require extensive post-generation verification (adding latency and cost), and that current state-of-the-art models achieve approximately 0.85–0.92 on comparable tasks without specialized pipelines.
+The product manager mediated by asking a different question: *What is the user's tolerance for citation errors, given that the alternative (manual literature search) has its own error rate?*
+
+Studies of manual literature review indicate that researchers miss approximately 20–30% of relevant sources and occasionally misattribute claims. [Bornmann & Mutz, 2015]
+A citation precision of 0.85 means the RA makes citation errors roughly 3× less frequently than the failure modes it replaces—a meaningful improvement even if imperfect.
+The threshold was set at 0.85 with a note that it should be revisited when the system matures and users develop higher expectations.
+
+This negotiation pattern recurs across all constraints: the threshold is not derived from first principles alone, but from the intersection of technical feasibility, user tolerance, and competitive positioning.
+
+**The final constraint set.**
+
+Hard constraints (violation → elimination):
 
 | Constraint | Metric | Threshold | Rationale |
 |------------|--------|-----------|-----------|
-| Citation correctness | Citation precision on eval-v1.0 | ≥0.85 | Fabricated citations destroy trust in academic contexts; a 15% error budget reflects the tolerance observed in user studies of research tools. [Marcus & Davis, 2019] |
-| Response latency | p95 end-to-end latency | ≤5.0s | Interactive research sessions tolerate approximately 5 seconds before context-switching behavior increases significantly. [Card et al., 1991] |
-| Cost per query | Fully loaded cost (API + retrieval + parsing) | ≤$0.15 | At 1,000 queries/day, cost must remain under $4,500/month to sustain a research-tool business model without external subsidy. |
-| Tool-call reliability | Fraction of queries with ≥1 successful tool invocation | ≥0.90 | The RA is useless if it cannot reach external paper databases; a 10% failure ceiling accommodates transient API errors. |
+| Citation correctness | Citation precision on eval-v1.0 | ≥0.85 | Fabricated citations destroy trust in academic contexts; the threshold reflects user tolerance calibrated against manual review error rates. [Marcus & Davis, 2019] |
+| Response latency | p95 end-to-end latency | ≤5.0s | Interactive research sessions tolerate approximately 5 seconds before context-switching behavior increases significantly; this threshold is derived from human-computer interaction research on acceptable wait times for cognitively complex tasks. [Card et al., 1991] |
+| Cost per query | Fully loaded cost (API + retrieval + parsing) | ≤$0.15 | At 1,000 queries/day, cost must remain under $4,500/month to sustain a research-tool business model without external subsidy. The threshold was back-calculated from a target gross margin of 60% at a $15/month subscription price with estimated 200 queries/user/month. |
+| Tool-call reliability | Fraction of queries with ≥1 successful tool invocation | ≥0.90 | The RA is useless if it cannot reach external paper databases; a 10% failure ceiling accommodates transient API errors while ensuring that the vast majority of user queries receive grounded (not hallucinated) responses. |
+
+The rationale column deserves emphasis.
+A common failure mode in constraint specification is stating thresholds without recording *why* that specific number was chosen.
+When thresholds lack documented rationale, they become arbitrary and resistant to principled revision.
+A product manager who inherits a constraint of "≥0.85 citation precision" without context cannot determine whether it should be 0.80 or 0.90 when circumstances change. [Nygard & Kramer, 1988]
 
 **Soft constraints (optimize within feasible region):**
 
-| Constraint | Metric | Target | Weight |
-|------------|--------|--------|--------|
-| Claim support | Fraction of claims supported by cited evidence | ≥0.80 | 0.35 |
-| Answer completeness | Coverage of query facets (manual rubric) | ≥0.75 | 0.25 |
-| Disambiguation | Correct interpretation of ambiguous queries | ≥0.85 | 0.20 |
-| Output structure | Adherence to required format (citations, sections) | ≥0.90 | 0.20 |
+| Constraint | Metric | Target | Weight | Rationale for Weight |
+|------------|--------|--------|--------|---------------------|
+| Claim support | Fraction of claims supported by cited evidence | ≥0.80 | 0.35 | Unsupported claims reduce value proposition vs. manual review; highest marginal impact on user trust after citation correctness |
+| Answer completeness | Coverage of query facets (manual rubric) | ≥0.75 | 0.25 | Incomplete answers require follow-up queries, degrading user experience; second-order impact after trust |
+| Disambiguation | Correct interpretation of ambiguous queries | ≥0.85 | 0.20 | Ambiguous queries represent ~15–20% of expected traffic; misinterpretation wastes retrieval budget and user time |
+| Output structure | Adherence to required format (citations, sections) | ≥0.90 | 0.20 | Consistent formatting enables downstream integration (citation managers, note-taking tools); lower weight because formatting failures are less consequential than content failures |
 
-Weights were assigned using swing weighting: each criterion was varied from its worst feasible to its best feasible value while holding others constant, and the resulting changes in product utility were rank-ordered. [Keeney & Raiffa, 1993]
-Claim support received the highest weight because unsupported claims, while less catastrophic than fabricated citations, directly reduce the product's value proposition relative to manual literature review.
+**The swing weighting procedure.**
+Weights were assigned using swing weighting, a structured method for eliciting preferences over multiple objectives. [Keeney & Raiffa, 1993]
+The procedure is worth describing because it is commonly replaced by ad hoc weight assignment, which introduces undocumented bias.
+
+1. **Define the swing range for each criterion.** For each soft constraint, identify the worst feasible value and the best feasible value:
+   - Claim support: 0.60 (worst) to 0.95 (best)
+   - Answer completeness: 0.50 (worst) to 0.90 (best)
+   - Disambiguation: 0.70 (worst) to 0.95 (best)
+   - Output structure: 0.75 (worst) to 0.98 (best)
+
+2. **Rank the swings.** Ask: "If all criteria are at their worst value, which single criterion would provide the most value by swinging to its best value?" The answer reveals the most important criterion. For the RA, claim support was ranked first: a system that supports 95% of its claims with evidence is fundamentally more useful than one that supports only 60%, regardless of other criteria.
+
+3. **Assign reference points.** The most important swing is assigned 100 points. Other swings are scored relative to it:
+   - Claim support: 100 (reference)
+   - Answer completeness: 71
+   - Disambiguation: 57
+   - Output structure: 57
+
+4. **Normalize to weights.** Divide each score by the total: 100 + 71 + 57 + 57 = 285. Claim support: 100/285 ≈ 0.35, etc.
+
+This procedure is transparent and reproducible: a different team performing the same elicitation may arrive at different weights, but the reasoning is traceable and debatable rather than opaque.
 
 #### 1.7.2 Candidate scoring
 
 Three candidates survived the landscape filter (Section 1.3) and baseline sweep (Section 1.4): GPT-5.2 (OpenAI), Sonnet 4.5 (Anthropic), and Llama 4 Maverick (Meta, self-hosted).
 Each was evaluated on the RA's eval-v1.0 dataset (100 questions, 3 difficulty tiers) under identical retrieval and tool configurations.
+
+**Controlling for confounders in model comparison.**
+A subtle but critical requirement for fair model comparison is controlling for system-level confounders.
+If model A is tested with a well-tuned prompt and model B with a generic prompt, the comparison measures prompt engineering skill, not model capability.
+For the RA evaluation, the following were held constant across all candidates:
+
+- Identical retrieval pipeline (same Semantic Scholar and arXiv clients, same rate limits)
+- Identical tool definitions (same function signatures and descriptions)
+- Identical system prompt (adapted only for model-specific formatting requirements, e.g., Claude's XML tags vs. OpenAI's function calling syntax)
+- Identical evaluation set (eval-v1.0, 100 questions)
+- Identical scoring rubric and scorer (same human annotator for claim support; same automated pipeline for citation precision)
+- Identical hardware and network conditions (same host, same time of day to control for API load)
+
+The only variable was the model itself.
+This level of control is expensive—each candidate requires a full evaluation run costing approximately $5–15 in API fees plus 4–6 hours of human annotation.
+But without it, the comparison is confounded and the decision is indefensible. [Jain, 1991]
 
 **Hard constraint results:**
 
@@ -429,9 +489,18 @@ Each was evaluated on the RA's eval-v1.0 dataset (100 questions, 3 difficulty ti
 
 *Llama 4 Maverick cost reflects amortized GPU infrastructure at moderate utilization (60%).
 
+**Analysis of the elimination.**
 Llama 4 Maverick is eliminated: it violates both the citation precision constraint (0.82 < 0.85) and the tool-call reliability constraint (0.87 < 0.90).
-This elimination is noteworthy because Maverick is the cheapest option by a factor of 2.5×—a product manager who optimizes on cost alone would select the wrong model. [Sculley et al., 2015]
-The constraint satisfaction framework prevents this error by enforcing hard gates before cost optimization.
+
+This elimination warrants careful examination because it illustrates several PM-relevant principles:
+
+1. **Cost optimization is subordinate to constraint satisfaction.** Maverick is the cheapest option by a factor of 2.5×. A product manager who optimizes on cost alone—or who treats cost as a weighted criterion rather than gating on hard constraints first—would select a model that cannot ship. [Sculley et al., 2015]
+
+2. **Multiple constraint violations compound risk.** Maverick fails on two independent constraints. Even if one violation were marginal (e.g., citation precision at 0.84 vs. threshold 0.85), the simultaneous failure on tool reliability indicates a systematic capability gap, not a measurement artifact.
+
+3. **Elimination is not permanent.** The decision record should note the specific shortfall so that Maverick can be re-evaluated when Meta releases an improved version. If a future Maverick variant achieves 0.87 citation precision and 0.92 tool reliability, it becomes a serious contender given its cost advantage.
+
+4. **Self-hosted models carry hidden costs that partially offset their price advantage.** The $0.02/query estimate assumes 60% GPU utilization on a dedicated cluster. At lower utilization (common during early adoption), the effective per-query cost increases. Infrastructure maintenance, model serving engineering, and on-call burden are not captured in the per-query number. A full total cost of ownership (TCO) comparison is required before concluding that self-hosting is cheaper.
 
 **Soft constraint scoring (feasible candidates only):**
 
@@ -443,115 +512,288 @@ The constraint satisfaction framework prevents this error by enforcing hard gate
 | Output structure | 0.20 | 0.93 | 0.91 |
 | **Weighted total** | **1.00** | **0.868** | **0.855** |
 
-GPT-5.2 leads by 1.3 percentage points—a narrow margin.
-The decision is not yet defensible without understanding how sensitive it is to measurement uncertainty and parameter changes.
+GPT-5.2 leads by 1.3 percentage points.
+This margin is narrow, and the decision is not yet defensible without understanding its sensitivity to perturbations.
 
 #### 1.7.3 Sensitivity analysis
 
-A decision that changes under plausible perturbations is not robust.
-Sensitivity analysis identifies the conditions under which the ranking between candidates reverses. [Saltelli et al., 2008]
+A product decision that changes under plausible perturbations is not robust.
+Sensitivity analysis identifies the conditions under which the ranking between candidates reverses, enabling the product manager to assess how much confidence to place in the decision and what future events might warrant re-evaluation. [Saltelli et al., 2008]
 
-**Weight sensitivity.** If the weight on disambiguation is increased from 0.20 to 0.35 (at the expense of claim support, reduced to 0.20), Sonnet 4.5 overtakes GPT-5.2:
+**Weight sensitivity.**
+The most common source of decision instability is uncertainty in the weights assigned to soft constraints.
+Swing weighting produces a single weight vector, but reasonable people might disagree on the relative importance of criteria.
+
+If the weight on disambiguation is increased from 0.20 to 0.35 (at the expense of claim support, reduced to 0.20), the ranking reverses:
 - GPT-5.2 weighted total: 0.862
 - Sonnet 4.5 weighted total: 0.863
 
 This crossover occurs because Sonnet 4.5 scores higher on disambiguation (0.90 vs. 0.88).
-The practical implication: if the product roadmap shifts toward handling more ambiguous, open-ended research questions, the model preference may change.
+The practical implication is significant: if the product roadmap shifts toward handling more ambiguous, open-ended research questions (e.g., "What are the emerging critiques of large language models in the social sciences?"—a query requiring careful disambiguation of scope), the model preference may change.
 
-**Threshold sensitivity.** Relaxing the latency constraint from 5.0s to 8.0s does not change the decision (both candidates are well within budget) but would re-admit Llama 4 Maverick for reconsideration—a relevant scenario if the product adds an asynchronous "deep research" mode where users tolerate longer waits.
+A product manager should document this sensitivity explicitly:
+*"The decision favors GPT-5.2 under the current weight vector, but is sensitive to the disambiguation weight. If product direction shifts toward open-ended queries, re-evaluate with adjusted weights."*
 
-**Cost sensitivity.** At the current cost/query, both candidates are viable.
-However, projecting to 10,000 queries/day:
-- GPT-5.2: $700/day → $21,000/month
-- Sonnet 4.5: $500/day → $15,000/month
+**Threshold sensitivity.**
+Hard constraint thresholds define the boundary between acceptable and unacceptable.
+Perturbing these boundaries reveals which constraints are "binding" (the candidate barely passes) and which have comfortable margin.
 
-The $6,000/month difference becomes material at scale.
-If the business model cannot support GPT-5.2's cost at projected volume, Sonnet 4.5 becomes the only feasible candidate—a constraint that does not appear at prototype scale but dominates at production scale. [Sculley et al., 2015]
+For GPT-5.2:
+- Citation precision: 0.91 vs. threshold 0.85 → margin of 0.06 (comfortable)
+- p95 latency: 3.2s vs. threshold 5.0s → margin of 1.8s (very comfortable)
+- Cost/query: $0.07 vs. threshold $0.15 → margin of $0.08 (comfortable)
+- Tool reliability: 0.96 vs. threshold 0.90 → margin of 0.06 (comfortable)
 
-**Measurement uncertainty.** With 100 evaluation samples, the 95% confidence interval on citation precision is approximately ±0.06 (using the normal approximation for proportions).
+No hard constraint is binding for GPT-5.2.
+This is favorable: it means minor degradation in model performance (due to API changes, traffic increases, or prompt modifications) is unlikely to trigger a constraint violation.
+
+Contrast with a hypothetical candidate scoring 0.86 on citation precision.
+With a margin of only 0.01 above the threshold, any measurement noise or production variance could push the metric below the hard gate.
+A binding constraint increases operational risk and demands more frequent monitoring.
+
+Relaxing the latency constraint from 5.0s to 8.0s would not change the ranking but would re-admit Llama 4 Maverick for consideration—a relevant scenario if the product adds an asynchronous "deep research" mode where users tolerate longer waits in exchange for more thorough analysis.
+This kind of "what-if" analysis is essential for roadmap planning: it identifies which product decisions would change the model selection and which are model-neutral.
+
+**Cost sensitivity at scale.**
+At the current per-query cost, both candidates are well within the $0.15 hard constraint.
+However, projecting to higher usage volumes reveals a divergence:
+
+| Daily Queries | GPT-5.2 Monthly | Sonnet 4.5 Monthly | Delta |
+|---------------|------------------|--------------------|-------|
+| 100 | $210 | $150 | $60 |
+| 1,000 | $2,100 | $1,500 | $600 |
+| 10,000 | $21,000 | $15,000 | $6,000 |
+| 50,000 | $105,000 | $75,000 | $30,000 |
+
+At 10,000 queries/day, the $6,000/month difference is material—equivalent to a mid-level engineer's monthly cost.
+At 50,000 queries/day, the $30,000/month difference may determine whether the product is profitable.
+
+This analysis does not change the model selection for v1.0 (both candidates are within budget at launch volumes), but it establishes a **cost-triggered re-evaluation point**: when daily query volume reaches a level where the cost difference exceeds a meaningful fraction of operating budget, the product manager should re-run the decision matrix with updated weights that reflect the increased importance of cost.
+
+**Measurement uncertainty.**
+With 100 evaluation samples, statistical precision is limited.
+The 95% confidence interval on citation precision (using the normal approximation for proportions) is approximately ±0.06.
 This means GPT-5.2's true citation precision is likely in [0.85, 0.97] and Sonnet 4.5's in [0.83, 0.95].
-The confidence intervals overlap substantially, suggesting that the difference in citation precision may not be statistically significant at this sample size.
-A product manager must decide whether to invest in a larger evaluation set (e.g., 500 questions, reducing the interval to ±0.03) or accept the current uncertainty and select based on secondary criteria.
+
+The confidence intervals overlap substantially.
+A product manager must confront this honestly: *the measured difference in citation precision between the two candidates is not statistically significant at this sample size.*
+The decision therefore rests primarily on the soft constraint weighted total (where GPT-5.2 leads by 1.3pp) and on secondary considerations such as cost trajectory and provider relationship.
+
+This has implications for evaluation investment: increasing the evaluation set to 500 questions would reduce the confidence interval to ±0.03, potentially resolving the ambiguity.
+The cost of this investment (approximately $50–75 in API fees plus 20–30 hours of annotation) must be weighed against the value of a more confident decision.
+For a v1.0 launch, the current ambiguity may be acceptable; for a production system processing thousands of queries daily, the investment in a larger evaluation set is almost certainly justified.
 
 #### 1.7.4 The decision record
 
-The output of the decision matrix is not merely a model name but a **decision record** that documents the reasoning chain. [Nygard & Kramer, 1988]
-This record serves three functions:
+The output of the decision matrix is not merely a model name but a **decision record** that documents the full reasoning chain. [Nygard & Kramer, 1988]
+This record is among the most important artifacts a product manager produces during model selection, yet it is frequently omitted in practice.
 
-1. **Auditability:** When stakeholders ask "why this model?", the record provides a traceable answer grounded in measured constraints, not subjective preference.
-2. **Reversibility:** When constraints change (new latency requirement, new pricing tier, new model release), the record identifies exactly which inputs to the decision have changed and whether re-evaluation is warranted.
-3. **Institutional memory:** Team members who were not present for the original decision can reconstruct the reasoning without relying on oral history.
+The decision record serves three functions:
 
-**RA Decision Record (excerpt):**
+1. **Auditability.** When a stakeholder, investor, or regulator asks "why this model?", the record provides a traceable answer grounded in measured constraints, not subjective preference. In regulated domains (healthcare, finance, government), this traceability may be legally required.
+
+2. **Reversibility.** When conditions change—a new model is released, pricing changes, user behavior shifts, or a constraint is revised—the record identifies exactly which inputs to the decision have changed and whether re-evaluation is warranted. Without a record, every change triggers a full re-evaluation from scratch because no one remembers which factors were decisive.
+
+3. **Institutional memory.** Team members who join after the original decision cannot reconstruct the reasoning from code or configuration alone. The record prevents the common failure mode where a successor product manager changes the model based on benchmark marketing without understanding the constraint-driven reasoning that selected the incumbent.
+
+**RA Decision Record:**
 
 ```
 Decision: GPT-5.2 as primary model for RA v1.0
+Status: Approved
 Date: 2026-02-24
-Candidates evaluated: GPT-5.2, Sonnet 4.5, Llama 4 Maverick
-Eliminated: Llama 4 Maverick (citation precision 0.82 < 0.85, tool reliability 0.87 < 0.90)
-Selected: GPT-5.2 (weighted soft score 0.868 vs. 0.855)
-Margin: 1.3pp (narrow; sensitive to disambiguation weight)
-Key risk: Cost at scale ($21K/mo at 10K queries/day)
-Mitigation: Implement Sonnet 4.5 as fallback; re-evaluate at 5K queries/day
-Re-evaluation trigger: Any of:
-  - New model release with >5% improvement on citation precision
-  - Cost/query exceeding $0.12 (80% of hard constraint)
-  - Latency p95 exceeding 4.0s (80% of hard constraint)
-Eval version: eval-v1.0 (100 questions, 3 tiers)
-Reviewers: [product lead], [ML lead]
+Authors: [product lead], [ML lead]
+Reviewers: [engineering lead], [research advisor]
+
+CONTEXT
+The RA requires a model capable of (a) reliable tool use for academic paper
+retrieval, (b) accurate citation of sources, and (c) synthesis of findings
+across multiple papers. The model must operate within defined cost and latency
+envelopes.
+
+CANDIDATES EVALUATED
+1. GPT-5.2 (OpenAI, hosted API)
+2. Sonnet 4.5 (Anthropic, hosted API)
+3. Llama 4 Maverick (Meta, self-hosted)
+
+EVALUATION
+- Dataset: eval-v1.0 (100 questions, 3 difficulty tiers)
+- Conditions: identical retrieval pipeline, tool definitions, and system prompt
+- Period: 2026-02-20 to 2026-02-23
+- Total evaluation cost: $47 (API fees) + 12 hours (annotation)
+
+ELIMINATIONS
+- Llama 4 Maverick: ELIMINATED
+  - Citation precision: 0.82 (required ≥0.85)
+  - Tool reliability: 0.87 (required ≥0.90)
+  - Note: cheapest candidate ($0.02/query) but fails two hard constraints
+
+DECISION
+- Selected: GPT-5.2
+  - Hard constraints: all pass with comfortable margins
+  - Soft weighted total: 0.868 (vs. Sonnet 4.5 at 0.855)
+  - Margin: 1.3pp (narrow)
+
+SENSITIVITY
+- Weight sensitivity: decision reverses if disambiguation weight > 0.35
+  and claim support weight < 0.20. Current product direction does not
+  favor this reweighting.
+- Cost sensitivity: at >10,000 queries/day, cost difference vs. Sonnet 4.5
+  exceeds $6,000/month. Re-evaluate cost weighting at that volume.
+- Measurement uncertainty: confidence intervals on citation precision overlap.
+  Decision rests on weighted total, not citation precision alone.
+
+FALLBACK
+- Sonnet 4.5 is maintained as tested fallback
+- Passes all hard constraints independently
+- Rollback time: <5 minutes (environment variable switch)
+
+RE-EVALUATION TRIGGERS
+- New model release with >5% improvement on citation precision
+- GPT-5.2 cost/query exceeding $0.12 (80% of hard constraint)
+- GPT-5.2 p95 latency exceeding 4.0s (80% of hard constraint)
+- Daily query volume exceeding 5,000 (cost sensitivity threshold)
+- Eval-v1.0 refresh (if evaluation set becomes stale due to distribution shift)
+
+RISKS
+- Provider lock-in: GPT-5.2 uses OpenAI-specific function calling syntax.
+  Mitigation: tool definitions use an abstraction layer (LangChain) that
+  supports multiple providers.
+- Silent model updates: OpenAI may update GPT-5.2 behavior without notice.
+  Mitigation: monthly regression evaluation against eval-v1.0.
+- Pricing changes: historical trend is downward, but increases are possible.
+  Mitigation: tested fallback on a different provider.
 ```
+
+The decision record is a living document.
+When any re-evaluation trigger fires, the product manager updates the record with the new evaluation results and either confirms the existing decision or initiates a transition plan.
+This practice transforms model selection from a one-time event into a continuous governance process.
 
 ### 1.8 Cost modeling under uncertainty
 
 Per-query cost, as computed in the baseline sweep, is a necessary but insufficient input to the model selection decision.
 A product manager must project costs across the product lifecycle under uncertainty about usage volume, query complexity distribution, and pricing changes. [Sculley et al., 2015]
+This section develops a cost model for the RA that addresses these uncertainties and demonstrates how cost analysis feeds back into both model selection and product design.
 
-#### 1.8.1 The cost components
+#### 1.8.1 Decomposing the cost stack
 
 The fully loaded cost of an AI product query is rarely limited to model inference.
+A common error is equating "cost per query" with "LLM token cost," ignoring the retrieval, processing, storage, and observability components that may collectively exceed the inference cost for certain query types.
+
 For the RA, the cost stack decomposes as follows:
 
-| Component | Description | RA Estimate |
-|-----------|-------------|-------------|
-| Model inference (input) | Tokens sent to the LLM | $0.005–0.02 |
-| Model inference (output) | Tokens generated by the LLM | $0.02–0.08 |
-| Retrieval API calls | Semantic Scholar, arXiv queries | $0.001–0.005 |
-| PDF download and parsing | Bandwidth + compute for full-text extraction | $0.002–0.01 |
-| Vector store operations | Embedding + similarity search (when caching is enabled) | $0.001–0.003 |
-| Logging and observability | Usage tracking, error logging | $0.0005 |
-| **Total per query** | | **$0.03–0.12** |
+| Component | Description | Fixed/Variable | RA Estimate (per query) |
+|-----------|-------------|----------------|------------------------|
+| LLM input tokens | Tokens sent to the model (system prompt + context + query) | Variable | $0.005–0.02 |
+| LLM output tokens | Tokens generated by the model (response + tool calls) | Variable | $0.02–0.08 |
+| Retrieval API calls | Semantic Scholar queries, arXiv queries | Variable | $0.001–0.005 |
+| PDF download | Bandwidth for downloading full-text papers | Variable | $0.001–0.003 |
+| PDF parsing | CPU compute for text extraction (PyMuPDF, pdfplumber) | Variable | $0.001–0.005 |
+| Vector store operations | Embedding generation + similarity search (when caching is active) | Variable | $0.001–0.003 |
+| Logging and observability | Usage tracking, JSONL writes, monitoring | Variable | $0.0005 |
+| Infrastructure (amortized) | Server/container, API gateway, storage | Fixed → amortized | $0.005–0.02 |
+| **Total per query** | | | **$0.03–0.15** |
 
-The wide range reflects query complexity: a simple factual question ("Who wrote Attention Is All You Need?") requires one search call and minimal generation, while a synthesis question ("What are the main critiques of transformer attention mechanisms in the recent NLP literature?") triggers multiple search-retrieve-read cycles.
+The wide range (5× between minimum and maximum) reflects query complexity.
+A simple factual question ("Who wrote Attention Is All You Need?") requires one search call, minimal retrieval context, and a short generation—total cost approximately $0.03.
+A synthesis question ("What are the main critiques of transformer attention mechanisms in the recent NLP literature, and how have subsequent architectures addressed them?") triggers multiple search-retrieve-read cycles, processes 3–5 full papers, and generates a long structured response—total cost approximately $0.12.
+
+**The importance of per-component tracking.**
+A product manager who tracks only aggregate cost per query cannot diagnose cost overruns or optimize the cost structure.
+When aggregate cost increases, is it because the LLM is generating longer responses?
+Because the retrieval layer is making more API calls?
+Because PDF parsing is slower and consuming more compute?
+Per-component logging (implemented in the RA via the `UsageLogger` writing to `data/api-usage.jsonl`) enables root-cause analysis of cost anomalies. [Beyer et al., 2016]
 
 #### 1.8.2 Usage distribution modeling
 
+Aggregate cost projections require a model of the expected query distribution.
 Observed usage of research tools follows a heavy-tailed distribution: most queries are simple, but a minority of complex queries consume disproportionate resources. [Baeza-Yates & Ribeiro-Neto, 2011]
-Based on analysis of academic search behavior, the RA models its query distribution as:
 
-| Query Tier | Fraction | Avg. Tool Calls | Avg. Tokens | Est. Cost |
-|------------|----------|-----------------|-------------|-----------|
-| Simple (factual) | 60% | 1–2 | 1,500 | $0.03 |
-| Moderate (analytical) | 30% | 3–5 | 4,000 | $0.07 |
-| Complex (synthesis) | 10% | 6–10 | 8,000 | $0.12 |
-| **Weighted average** | | | | **$0.052** |
+The RA models its expected query distribution in three tiers:
 
-This distribution is an assumption that must be validated with production telemetry; initial estimates are typically wrong by 30–50%. [Jain, 1991]
+| Query Tier | Description | Fraction | Avg. Tool Calls | Avg. Input Tokens | Avg. Output Tokens | Est. Cost |
+|------------|-------------|----------|-----------------|-------------------|--------------------| ----------|
+| Simple (factual) | Single-fact questions with known answers | 60% | 1–2 | 1,500 | 500 | $0.03 |
+| Moderate (analytical) | Questions requiring comparison or analysis across papers | 30% | 3–5 | 4,000 | 1,200 | $0.07 |
+| Complex (synthesis) | Multi-paper synthesis, critique, or literature review | 10% | 6–10 | 8,000 | 2,500 | $0.12 |
+| **Weighted average** | | **100%** | | | | **$0.052** |
 
-#### 1.8.3 Scaling projections
+This distribution is an assumption that must be validated with production telemetry.
+Initial estimates of query distribution are typically wrong by 30–50%. [Jain, 1991]
+The most common error is underestimating the proportion of complex queries: users who adopt an AI research tool often shift their behavior toward more ambitious queries than they would attempt manually, because the marginal effort of asking a harder question is low.
 
-Given the weighted average cost, monthly projections under three growth scenarios:
+**Updating the distribution with production data.**
+The cost model should be parameterized so that the distribution can be updated as real usage data accumulates.
+After the first month of production, the actual tier fractions can be measured from tool-call counts and token usage logs.
+If the actual distribution is 45% simple / 35% moderate / 20% complex (users are more ambitious than expected), the weighted average cost increases from $0.052 to $0.065—a 25% increase that, compounded over thousands of daily queries, materially affects the business model.
 
-| Scenario | Daily Queries | Monthly Cost | Annual Cost |
-|----------|---------------|--------------|-------------|
-| Early (pilot) | 100 | $156 | $1,872 |
-| Growth | 1,000 | $1,560 | $18,720 |
-| Scale | 10,000 | $15,600 | $187,200 |
-| Enterprise | 50,000 | $78,000 | $936,000 |
+#### 1.8.3 Token estimation methodology
 
-These figures assume GPT-5.2 pricing.
-With Sonnet 4.5, costs are approximately 30% lower; with a self-hosted model (post-infrastructure investment), marginal costs are approximately 70% lower but require $15,000–50,000/month in fixed GPU infrastructure depending on utilization. [Patterson et al., 2021]
+Accurate cost projection requires understanding what drives token consumption.
+For the RA, token usage is determined by the agent loop structure:
 
-#### 1.8.4 The crossover analysis
+**Input tokens per turn:**
+- System prompt: ~800 tokens (fixed)
+- User query: ~50–200 tokens (variable)
+- Retrieved context (paper abstracts, snippets): ~500–4,000 tokens per retrieval cycle (variable, depends on how many papers are fetched)
+- Tool call history (accumulated across the ReAct loop): grows with each iteration
+
+**The compounding cost of multi-turn agents.**
+In a ReAct loop, each iteration appends the previous tool call and observation to the context.
+By the 5th iteration, the accumulated context may exceed the original query + retrieval context by 3–4×.
+This compounding effect means that complex queries are disproportionately expensive—not linearly proportional to the number of tool calls, but super-linearly proportional because each subsequent LLM call processes all previous context.
+
+For the RA, a query requiring 8 tool calls generates approximately:
+- Turn 1: 1,500 input tokens
+- Turn 2: 2,800 input tokens (turn 1 context + observation)
+- Turn 3: 4,200 input tokens
+- ...
+- Turn 8: ~12,000 input tokens
+
+Total input tokens across all turns: approximately 50,000—far more than the 8,000 "per-query" estimate suggests when counting only the final context window.
+This distinction between "context window tokens" and "total API tokens billed" is a common source of cost estimation error in agent-based systems.
+
+**Mitigation strategies for token cost:**
+1. **Context pruning:** Summarize previous tool observations instead of including full text. Reduces accumulated context at the cost of some information loss.
+2. **Prompt caching:** Both OpenAI and Anthropic offer cached input pricing (typically 10× cheaper than uncached). If the system prompt and common retrieval context are cacheable, input costs decrease substantially.
+3. **Early stopping:** If the agent has sufficient information after 3 tool calls, a well-designed prompt can instruct it to synthesize rather than continuing to search. This requires careful prompt engineering to balance thoroughness against cost.
+
+#### 1.8.4 Scaling projections
+
+Given the weighted average cost of $0.052/query, monthly projections under four growth scenarios:
+
+| Scenario | Daily Queries | Monthly Queries | Monthly Cost | Annual Cost |
+|----------|---------------|-----------------|--------------|-------------|
+| Pilot (alpha) | 100 | 3,000 | $156 | $1,872 |
+| Early adoption | 1,000 | 30,000 | $1,560 | $18,720 |
+| Growth | 10,000 | 300,000 | $15,600 | $187,200 |
+| Scale | 50,000 | 1,500,000 | $78,000 | $936,000 |
+
+These figures assume GPT-5.2 pricing with no optimization.
+With prompt caching (reducing input costs by ~80% for cached portions), the growth-stage cost decreases to approximately $9,000–11,000/month—a meaningful reduction that justifies the engineering investment in caching infrastructure at that scale.
+
+**The revenue side.**
+Cost projections are meaningless without revenue context.
+For the RA, consider two business models:
+
+*Subscription model ($15/month, est. 200 queries/user/month):*
+- Cost per user: $0.052 × 200 = $10.40/month
+- Gross margin: ($15 − $10.40) / $15 = 30.7%
+
+This margin is dangerously thin.
+At scale (with caching), cost per user drops to ~$6–7/month, improving margin to 50–55%.
+But during the growth phase, the business operates near breakeven on variable costs alone—before accounting for engineering salaries, infrastructure, and customer acquisition.
+
+*Usage-based model ($0.10/query):*
+- Gross margin per query: ($0.10 − $0.052) / $0.10 = 48%
+
+Better margin, but usage-based pricing creates uncertainty for users and may suppress adoption.
+
+A product manager must model both pricing strategies against the cost curve to identify which is viable at each growth stage.
+The insight for model selection: **Sonnet 4.5 at $0.05/query (vs. GPT-5.2 at $0.07/query) improves subscription gross margin from 30.7% to 51.3%—a difference that may determine whether the business is fundable.**
+
+#### 1.8.5 The crossover analysis
 
 A critical product decision is the **model hosting crossover point**: the usage volume at which self-hosting becomes cheaper than API access.
 
@@ -559,172 +801,389 @@ For the RA:
 - API cost (GPT-5.2): $0.052 × Q per month, where Q is monthly query volume
 - Self-hosted cost (Llama 4 Maverick on 4×A100): ~$18,000/month fixed + $0.008 × Q variable
 
-Setting these equal: $0.052Q = $18,000 + $0.008Q → Q = 409,091 queries/month ≈ 13,600 queries/day.
+Setting these equal: $0.052Q = $18,000 + $0.008Q → $0.044Q = $18,000 → Q ≈ 409,000 queries/month ≈ 13,600 queries/day.
 
 Below 13,600 queries/day, the API is cheaper.
 Above it, self-hosting saves money—**but only if the self-hosted model meets all hard constraints.**
-Since Llama 4 Maverick failed the citation precision constraint (Section 1.7.2), the crossover is irrelevant unless model quality improves in a future release.
+Since Llama 4 Maverick failed the citation precision constraint (Section 1.7.2), the crossover is currently irrelevant.
 
-This illustrates a general principle: cost optimization is subordinate to constraint satisfaction.
-A cheaper model that violates product requirements has infinite effective cost because it cannot ship. [Sculley et al., 2015]
+However, the crossover analysis remains valuable for roadmap planning:
+1. **It establishes a volume target.** If the product reaches 13,600 queries/day, self-hosting becomes economically attractive—motivating investment in improving open-weight model quality for the RA's specific use case (e.g., fine-tuning Maverick on citation tasks to close the precision gap).
+2. **It quantifies the value of model improvement.** If Maverick's citation precision could be improved from 0.82 to 0.87 through fine-tuning (a topic addressed in Chapter 2), the self-hosting option becomes viable and saves $30,000+/month at scale.
+3. **It creates a contingency plan.** If API pricing increases unexpectedly, the crossover point drops—and having a self-hosting plan ready reduces the urgency of the pricing shock.
 
-#### 1.8.5 Pricing risk and contractual exposure
+**Hidden costs of self-hosting.**
+The crossover analysis above considers only compute costs.
+Self-hosting introduces additional costs that are frequently underestimated: [Patterson et al., 2021]
+
+- **Engineering time:** Setting up and maintaining a model serving stack (vLLM, TGI, or similar) requires specialized ML engineering. Estimate 0.5–1.0 FTE ongoing.
+- **On-call burden:** Self-hosted models require incident response for GPU failures, OOM errors, inference hangs. This is a 24/7 responsibility that API providers absorb.
+- **Scaling complexity:** Auto-scaling GPU instances is harder than auto-scaling API calls. Over-provisioning wastes money; under-provisioning causes latency spikes.
+- **Model updates:** When Meta releases Llama 4.1, the self-hosted deployment requires testing, validation, and rollout—effort that API providers handle transparently.
+
+A more complete crossover analysis adds $5,000–15,000/month for these hidden costs, pushing the breakeven point to approximately 20,000+ queries/day.
+
+#### 1.8.6 Pricing risk and contractual exposure
 
 Model providers change pricing.
-Between 2023 and 2026, OpenAI reduced GPT-4-class pricing by approximately 90%, while simultaneously deprecating older models. [OpenAI, 2024]
-A product manager must account for:
+Between 2023 and 2026, OpenAI reduced GPT-4-class pricing by approximately 90%, while simultaneously deprecating older models and introducing new pricing tiers for cached vs. uncached input. [OpenAI, 2024]
 
-1. **Price decreases** — favorable, but may shift the competitive landscape (competitors also benefit).
-2. **Price increases** — rare but possible, especially for specialized models. Mitigation: maintain a tested fallback model at all times.
-3. **Model deprecation** — the provider retires the model entirely. Mitigation: the decision record (Section 1.7.4) identifies re-evaluation triggers; the baseline sweep procedure can be re-run on the replacement model within days if the evaluation infrastructure is maintained.
-4. **Rate limit changes** — the provider restricts throughput. Mitigation: implement client-side rate limiting and queue management; maintain a secondary provider.
+A product manager must account for four categories of pricing risk:
 
-The RA mitigates pricing risk by maintaining Sonnet 4.5 as a tested fallback: if GPT-5.2 pricing increases by more than 40%, the fallback model is deployed without re-evaluation (since it already passed all hard constraints).
+1. **Price decreases** — favorable for the product, but also benefit competitors. A price decrease that makes the product more profitable also lowers the barrier for new entrants using the same model.
+
+2. **Price increases** — rare in the historical trend but possible, especially for specialized or high-demand models. Mitigation: maintain a tested fallback model on a different provider at all times. The RA's fallback (Sonnet 4.5 on Anthropic) ensures that no single provider has pricing leverage over the product.
+
+3. **Model deprecation** — the provider retires the model entirely, requiring migration to a successor. OpenAI deprecated GPT-4 Turbo, GPT-3.5 Turbo, and several other models between 2024–2026. Mitigation: the decision record (Section 1.7.4) identifies re-evaluation triggers; the baseline sweep procedure (Section 1.4) can be re-run on the replacement model within days if the evaluation infrastructure is maintained. **The evaluation infrastructure is the hedge against deprecation.**
+
+4. **Rate limit changes** — the provider restricts throughput, effectively increasing the cost of scaling. Mitigation: implement client-side rate limiting, queue management, and request prioritization; maintain capacity on a secondary provider for overflow.
+
+**Contractual considerations.**
+At scale (>$10,000/month in API spend), direct contracts with model providers typically offer volume discounts (10–30% below list pricing), committed throughput guarantees, and advance notice of deprecation.
+A product manager should initiate contract discussions before reaching scale, not after—negotiating from a position of projected volume rather than current spend.
 
 ### 1.9 Production readiness gate
 
 Model selection produces a candidate; production readiness determines whether that candidate can be deployed to users.
-The gap between "works in evaluation" and "works in production" is the dominant source of AI product failure. [Sculley et al., 2015]
+The gap between "works in evaluation" and "works in production" is the dominant source of AI product failure—not because teams select the wrong model, but because they deploy the right model without the operational infrastructure required to sustain it. [Sculley et al., 2015]
 
-#### 1.9.1 The operational requirements
+This section defines the production readiness gate for the RA: the set of conditions that must be satisfied before the selected model can serve real users.
 
-Production deployment introduces requirements that do not appear during evaluation:
+#### 1.9.1 Why evaluation performance is insufficient
 
-**Availability.** The system must respond to queries during stated operating hours.
-For the RA, the availability target is 99.5% (approximately 3.6 hours of downtime per month).
-This target constrains architectural choices: a single-provider API dependency with no fallback cannot meet 99.5% if the provider's SLA is 99.9% and the retrieval APIs add independent failure modes.
+A model that achieves 0.91 citation precision on eval-v1.0 will not achieve 0.91 citation precision in production.
+Several systematic factors degrade production performance relative to evaluation:
 
-The compound availability of sequential dependencies is the product of individual availabilities. [Beyer et al., 2016]
-For the RA:
-- LLM API availability: 99.9%
-- Semantic Scholar API: 99.5%
-- arXiv API: 99.0%
-- Compound: 99.9% × 99.5% × 99.0% ≈ 98.4%
+**Distribution shift.** The evaluation set represents the product manager's best guess at the query distribution, constructed before real users interact with the system. Real users will ask questions that differ from the evaluation set in ways that are difficult to predict. They will ask about topics not covered by the evaluation set, use phrasing that differs from the evaluation prompts, and combine the RA with workflows the designers did not anticipate.
 
-This is below the 99.5% target.
-Mitigation options include caching (reducing dependency on retrieval APIs for repeated queries), graceful degradation (answering from cached knowledge when retrieval is unavailable), and redundant retrieval sources.
+For the RA, the evaluation set was constructed by domain experts who formulated well-structured research questions.
+Real users—especially those new to a research domain—may ask vague, poorly scoped, or ambiguous questions ("tell me about AI safety" vs. "What are the main technical approaches to alignment in large language models published since 2023?").
+The model's citation precision on vague queries is likely lower than on well-structured ones, because vague queries require more disambiguation and the retrieval results are noisier.
 
-**Latency under load.** Evaluation measures latency on isolated queries.
+**Adversarial and edge-case inputs.** Evaluation sets typically exclude deliberately adversarial inputs (unless specifically designed for robustness testing). In production, users will inevitably test the system's boundaries—asking about topics outside the academic domain, requesting actions the system is not designed for, or providing inputs that trigger unexpected model behavior.
+
+**Infrastructure variance.** Evaluation is typically conducted under controlled conditions: low concurrency, stable network, no competing workload. Production introduces variable API latency (due to provider-side load), concurrent requests (causing queuing), network interruptions, and infrastructure failures.
+
+**Temporal drift.** The evaluation set is a snapshot; the world changes. New papers are published, terminology evolves, and the distribution of user queries shifts over time. A model that performs well on eval-v1.0 in February 2026 may degrade by August 2026 if the evaluation set is not refreshed.
+
+These factors collectively motivate the production readiness gate: a set of operational requirements that must be met *in addition to* evaluation performance before the model is deployed.
+
+#### 1.9.2 Availability and compound reliability
+
+The system must respond to queries during stated operating hours.
+For the RA, the availability target is 99.5% (approximately 3.6 hours of permissible downtime per month).
+
+This target appears modest, but it constrains architectural choices more than it may seem.
+The RA depends on multiple external services, each with its own reliability:
+
+| Dependency | Estimated Availability | Failure Mode |
+|------------|----------------------|--------------|
+| OpenAI GPT-5.2 API | 99.9% | Request errors, rate limiting, model degradation |
+| Semantic Scholar API | 99.5% | Downtime, rate limiting, stale index |
+| arXiv API | 99.0% | Maintenance windows, XML parsing errors |
+| Internal infrastructure | 99.9% | Server crashes, deployment errors |
+
+The compound availability of sequential dependencies (where *all* must succeed for a query to complete) is the product of individual availabilities: [Beyer et al., 2016]
+
+99.9% × 99.5% × 99.0% × 99.9% ≈ 98.3%
+
+This is **below the 99.5% target** by a significant margin—equivalent to approximately 12.5 hours of downtime per month instead of the budgeted 3.6 hours.
+
+**Mitigation strategies:**
+
+1. **Graceful degradation.** Not every dependency is required for every query. If the arXiv API is unavailable, the RA can still search Semantic Scholar and return results based on metadata and abstracts—a degraded but functional response. The system should detect which dependencies are available and adapt its behavior accordingly, rather than failing entirely when any single dependency is down.
+
+2. **Caching.** Frequently accessed papers (high-citation papers in popular fields) can be cached locally, reducing dependency on external APIs for common queries. Cache hit rates of 20–40% on retrieval API calls can meaningfully improve compound availability.
+
+3. **Redundant retrieval sources.** Adding a third retrieval source (e.g., CrossRef, OpenAlex) provides redundancy: if Semantic Scholar is down, CrossRef can serve metadata queries. This increases integration complexity but improves the reliability of the retrieval layer.
+
+4. **Timeout and fallback.** If an external API does not respond within a defined timeout (e.g., 3 seconds), the system falls back to cached results or responds with a partial answer plus an explicit disclaimer ("Some sources may not be available; results are based on cached data").
+
+With graceful degradation and caching, the effective availability of the RA's core functionality (returning a cited answer, even if not using all retrieval sources) can exceed 99.5% even when individual dependencies fall below their SLAs.
+
+#### 1.9.3 Latency under load
+
+Evaluation measures latency on isolated queries—one request at a time, with no queuing.
 Production latency includes queuing time when concurrent users exceed the system's throughput capacity.
+
+**Estimating concurrency requirements.**
 Little's Law relates mean concurrency (L), arrival rate (λ), and mean service time (W): L = λW. [Jain, 1991]
-If the RA's mean service time is 3 seconds and the arrival rate peaks at 10 queries/second, the mean concurrency is 30—requiring sufficient parallelism in both the LLM API (rate limits) and retrieval layer.
 
-**Data freshness.** Academic papers are published continuously.
-The RA's retrieval sources (Semantic Scholar, arXiv) index new papers with varying latency: arXiv within hours, Semantic Scholar within days.
-A production system must define a freshness SLO: "The RA should be able to retrieve any paper published more than 72 hours ago."
-This constrains the retrieval architecture and may require supplementary sources for very recent publications.
+For the RA:
+- Mean service time (W): 3.0 seconds (observed in evaluation)
+- Peak arrival rate (λ): estimated at 10 queries/second during peak hours (based on 10,000 daily queries concentrated in a 6-hour active window)
+- Mean concurrency: L = 10 × 3.0 = 30 concurrent requests
 
-#### 1.9.2 Error budgets
+This means the system must support 30 concurrent requests without significant queuing delay.
+The constraint propagates to the LLM API: OpenAI's rate limits for GPT-5.2 must accommodate 30 concurrent requests, and the retrieval APIs must similarly support the throughput.
+
+**Queuing behavior.**
+When arrival rate approaches or exceeds service capacity, queuing delay grows non-linearly.
+For an M/M/1 queue (a simple model), mean response time is W / (1 − ρ), where ρ = λW/capacity is the utilization factor. [Jain, 1991]
+At 80% utilization, mean response time is 5× the service time; at 90% utilization, it is 10×.
+
+This non-linearity means that a system operating comfortably at 70% utilization can violate the latency constraint during traffic spikes that push utilization above 85%.
+Mitigation: provision capacity to maintain utilization below 70% during expected peaks, or implement request queuing with explicit timeouts and user-facing wait indicators.
+
+**Tail latency.**
+The p95 latency constraint (≤5.0s) means that 95% of queries must complete within 5 seconds, but 5% may take longer.
+The distribution of latency in agent-based systems is heavy-tailed: most queries complete in 2–3 seconds, but complex queries requiring 6+ tool calls can take 10–15 seconds.
+A product manager must decide how to handle the tail:
+
+- **Accept the tail:** Display a loading indicator and let long queries complete. Acceptable if the user has context (e.g., "Searching 5 papers...").
+- **Timeout and return partial results:** After 5 seconds, return whatever the agent has synthesized so far, with a disclaimer that the search is incomplete. This satisfies the latency constraint but may reduce answer quality.
+- **Offer asynchronous mode:** For complex queries, offer to email or notify the user when the analysis is complete. This reframes the latency constraint as a UX design decision rather than a hard technical constraint.
+
+The RA implements a combination: simple queries return synchronously within the latency budget; complex queries that exceed 5 seconds display intermediate results ("Found 3 relevant papers so far...") and continue processing.
+
+#### 1.9.4 Data freshness
+
+Academic papers are published continuously.
+The RA's retrieval sources (Semantic Scholar, arXiv) index new papers with varying latency: arXiv within hours of submission, Semantic Scholar within days of publication (due to metadata enrichment and citation graph updates).
+
+A production system must define a **freshness SLO**: the maximum acceptable delay between a paper's publication and its availability in the RA's retrieval results.
+
+For the RA, the freshness SLO is defined as:
+- arXiv preprints: available within 48 hours of posting
+- Published papers (with DOI): available within 7 days of Semantic Scholar indexing
+
+This SLO is achievable with the current retrieval architecture (which queries external APIs in real-time) but would be violated if the system migrated to a fully cached/indexed architecture without periodic refresh.
+
+**Why freshness matters for product trust.**
+If a researcher asks about a paper published yesterday and the RA cannot find it, the researcher's trust in the system decreases disproportionately—even if the system correctly handles 99% of queries about older papers.
+Freshness failures are highly salient because the user *knows* the paper exists (they may have just seen it on arXiv) and interprets the RA's failure as incompetence rather than latency.
+
+This is an instance of a general principle: **user trust is degraded more by failures on known-answer queries than by failures on ambiguous queries.** A product manager must identify these high-salience failure modes and ensure the system handles them reliably, even if they represent a small fraction of total queries.
+
+#### 1.9.5 Error budgets
 
 An error budget quantifies the acceptable amount of unreliability over a given period. [Beyer et al., 2016]
-It operationalizes the relationship between reliability investment and feature velocity: as long as the error budget is not exhausted, the team can ship changes; when it is exhausted, reliability work takes priority.
+It operationalizes the relationship between reliability investment and feature velocity: as long as the error budget is not exhausted, the team can ship changes (new features, prompt updates, model upgrades); when it is exhausted, reliability work takes priority.
 
 For the RA, error budgets are defined per hard constraint:
 
-| Constraint | Target | Error Budget (monthly) |
-|------------|--------|------------------------|
-| Availability | 99.5% | 3.6 hours downtime |
-| Citation precision | ≥0.85 | ≤15% of sampled queries may have incorrect citations |
-| p95 latency | ≤5.0s | ≤5% of queries may exceed 5s |
-| Tool reliability | ≥0.90 | ≤10% of queries may have tool failures |
+| Constraint | Target | Error Budget (per month) | Monitoring Method |
+|------------|--------|--------------------------|-------------------|
+| Availability | 99.5% | 3.6 hours downtime | Uptime monitoring (ping + synthetic queries) |
+| Citation precision | ≥0.85 | ≤15% of sampled queries may have incorrect citations | Daily automated eval on 50-query sample |
+| p95 latency | ≤5.0s | ≤5% of queries may exceed 5s | Latency percentile dashboard |
+| Tool reliability | ≥0.90 | ≤10% of queries may have all tool calls fail | Tool-call success rate counter |
 
-When monitoring detects that a constraint is approaching its error budget ceiling (e.g., citation precision drops to 0.86, consuming 93% of the budget), an alert triggers investigation before users are materially affected.
+**The error budget as a governance mechanism.**
+Error budgets are more than monitoring thresholds—they are a governance mechanism that aligns engineering priorities with product requirements.
 
-#### 1.9.3 Monitoring and observability
+Consider a scenario: the ML engineer wants to deploy an updated system prompt that improves answer completeness (a soft constraint) but has not been fully evaluated for citation precision impact.
+Without an error budget, this becomes a judgment call with no clear decision framework.
+With an error budget, the decision is structured:
+
+1. Check current citation precision error budget consumption: 8% of monthly budget used.
+2. Deploy the new prompt to 10% of traffic (canary).
+3. Monitor citation precision on the canary population for 24 hours.
+4. If the canary consumes error budget at an acceptable rate (projected to stay under 50% of monthly budget), expand to 100%.
+5. If the canary shows degradation (projected to exceed monthly budget), roll back.
+
+This procedure allows the team to ship improvements quickly while maintaining a safety net.
+It replaces the false binary of "ship everything" vs. "test everything exhaustively" with a calibrated approach that matches the level of caution to the remaining error budget. [Beyer et al., 2016]
+
+#### 1.9.6 Monitoring and observability
 
 Production AI systems require monitoring at three levels: [Breck et al., 2017]
 
-1. **Infrastructure monitoring** — API latency, error rates, throughput, cost accumulation. Standard application monitoring applies.
-2. **Model behavior monitoring** — Output quality metrics computed on a rolling sample. For the RA: citation precision on a daily sample of 50 queries, scored by automated evaluation (LLM-as-judge, calibrated against human labels).
-3. **Data distribution monitoring** — Detecting shifts in query distribution that may degrade model performance. For the RA: monitoring the fraction of queries about topics not represented in the evaluation set.
+**Level 1: Infrastructure monitoring.**
+Standard application monitoring: API latency distributions, error rates by endpoint, throughput (queries/second), CPU/memory utilization, cost accumulation rate.
+This is table-stakes for any production system and is well-supported by existing monitoring tools (Prometheus, Datadog, CloudWatch, etc.).
 
-The RA implements monitoring through the `UsageLogger` (infrastructure-level JSONL logging of every API call) and a planned automated evaluation pipeline that samples production queries and scores them against the eval rubric.
+For the RA, infrastructure monitoring is implemented through the `UsageLogger`, which writes a JSONL entry for every API call with timestamp, endpoint, response time, token counts, and cost estimate.
+Aggregation queries over this log produce the dashboards needed for infrastructure monitoring.
 
-#### 1.9.4 Rollback and incident response
+**Level 2: Model behavior monitoring.**
+This is specific to AI products and is frequently neglected.
+Model behavior monitoring detects degradation in output quality that does not manifest as infrastructure errors.
+
+For the RA, model behavior monitoring includes:
+- **Daily automated evaluation:** A pipeline that runs 50 randomly sampled production queries through the evaluation scorer (automated citation precision check, claim-support check). The automated scorer is calibrated against human judgments (agreement rate ≥0.85) to ensure that automated monitoring is a reliable proxy for human quality assessment.
+- **Output distribution monitoring:** Track the distribution of output characteristics: average response length, number of citations per response, fraction of responses with zero citations, fraction of responses that include "I could not find" disclaimers. Sudden shifts in these distributions may indicate model degradation even if the automated quality score has not yet detected it.
+- **Tool-call pattern monitoring:** Track the average number of tool calls per query, the distribution of tool types used, and the fraction of queries where the agent "gives up" (reaches max iterations without a satisfactory answer). An increase in max-iteration hits may indicate that the model's reasoning ability has degraded (e.g., due to a silent provider update).
+
+**Level 3: Data distribution monitoring.**
+Detecting shifts in the input distribution that may degrade model performance even if the model itself has not changed.
+
+For the RA:
+- **Query topic distribution:** Cluster production queries by topic (using embeddings or keyword analysis) and compare against the evaluation set's topic distribution. If a significant fraction of production queries falls in topics not represented by the evaluation set, the automated quality estimates may be unreliable.
+- **Query complexity distribution:** Track the fraction of queries in each complexity tier (simple/moderate/complex). If users shift toward more complex queries (which is likely as they develop trust in the system), the effective cost per query and error rates may increase.
+- **Retrieval result quality:** Monitor the average number of results returned per search, the fraction of searches with zero results, and the average citation count of retrieved papers. A decrease in retrieval quality may indicate changes in external API behavior or indexing coverage.
+
+#### 1.9.7 Rollback and incident response
 
 A production readiness gate must include a rollback plan: what happens when the deployed model produces unacceptable results? [Beyer et al., 2016]
 
-For the RA:
-1. **Immediate rollback** — Switch from GPT-5.2 to Sonnet 4.5 (pre-tested fallback) via environment variable change. No code deployment required. Rollback time: <5 minutes.
-2. **Partial rollback** — Route a fraction of traffic to the fallback model while investigating the primary model's degradation. Requires a traffic-splitting layer (implemented in the API gateway).
-3. **Feature flag** — Disable specific agent capabilities (e.g., full-text PDF parsing) if a particular tool is causing failures, while maintaining core search-and-cite functionality.
+**The rollback hierarchy for the RA:**
 
-The rollback plan is tested quarterly: the fallback model is run against the current evaluation set to confirm it still meets hard constraints.
-Model providers occasionally change model behavior through silent updates; a fallback that passed constraints six months ago may not pass today. [Sculley et al., 2015]
+1. **Prompt rollback (minutes).** If a prompt change causes degradation, revert to the previous prompt version. This is the fastest rollback and requires only a configuration change. The RA maintains version-controlled prompts in the codebase; reverting is a git revert + deployment.
 
-#### 1.9.5 The readiness checklist
+2. **Model rollback (minutes).** Switch from GPT-5.2 to Sonnet 4.5 (the pre-tested fallback) via environment variable change. No code deployment required. Rollback time: <5 minutes. This is the primary rollback mechanism for model-level failures.
 
-Before a model selection can be considered production-ready, the following gates must be satisfied:
+3. **Feature rollback (minutes).** Disable specific agent capabilities (e.g., full-text PDF parsing, citation chasing) if a particular tool or pipeline stage is causing failures, while maintaining core search-and-cite functionality. Implemented via feature flags.
 
+4. **Full rollback (hours).** Revert the entire system to a known-good state (previous deployment). This is the nuclear option, used only when multiple components are simultaneously failing and the root cause is unclear.
+
+**Testing the rollback plan.**
+A rollback plan that has never been tested is not a plan—it is a hope. [Beyer et al., 2016]
+The RA's rollback plan is tested quarterly:
+- The fallback model (Sonnet 4.5) is run against the current evaluation set to confirm it still meets hard constraints. Model providers occasionally change model behavior through silent updates; a fallback that passed constraints six months ago may not pass today.
+- The prompt rollback procedure is exercised: a previous prompt version is deployed to a staging environment and validated.
+- The feature flag system is tested: each flag is toggled off individually and the system's degraded behavior is verified.
+
+#### 1.9.8 The silent model update problem
+
+A unique challenge of AI products that rely on hosted API models is the **silent model update**: the provider modifies the model's behavior without explicit notification. [Sculley et al., 2015]
+
+This is not hypothetical.
+Between 2023 and 2026, multiple instances were documented where hosted model behavior changed between API calls on the same model version, causing unexpected regressions in downstream applications.
+The changes are typically minor (adjustments to safety filters, output formatting, or sampling parameters) but can be consequential for products with tight quality constraints.
+
+For the RA, the mitigation strategy is:
+1. **Continuous evaluation:** The daily automated evaluation (Level 2 monitoring) detects behavioral changes within 24 hours. If citation precision drops below the alert threshold, investigation begins immediately.
+2. **Versioned snapshots:** When available, use pinned model versions (e.g., `gpt-5.2-2026-02-15`) rather than the latest alias. This prevents silent updates but requires periodic manual upgrades.
+3. **Provider communication:** At sufficient spend levels, establish a direct relationship with the provider's developer relations team to receive advance notice of planned changes.
+4. **Evaluation-as-contract:** The evaluation set serves as a de facto contract with the model provider: "Our product depends on this model achieving X on these inputs. If an update degrades performance below X, we will roll back." This framing makes evaluation infrastructure an asset, not a cost.
+
+#### 1.9.9 The readiness checklist
+
+Before a model selection can be considered production-ready, the following gates must be satisfied.
+This checklist is intentionally specific to encourage rigorous verification rather than box-checking.
+
+**Evaluation gates:**
 - [ ] All hard constraints pass on the selected model (eval-v1.0 or later)
-- [ ] A tested fallback model exists and passes all hard constraints
-- [ ] Rollback procedure is documented and tested
-- [ ] Monitoring covers infrastructure, model behavior, and data distribution
-- [ ] Error budgets are defined and alerting thresholds are configured
-- [ ] Cost projections exist for 3 growth scenarios (current, 5×, 20×)
+- [ ] Confidence intervals on hard constraint metrics are documented
+- [ ] A tested fallback model exists and passes all hard constraints independently
+- [ ] The evaluation set is versioned and the version is recorded in the decision record
+
+**Operational gates:**
+- [ ] Compound availability has been calculated and meets the target (with mitigations)
+- [ ] Latency under expected peak load has been estimated (queuing model or load test)
+- [ ] Data freshness SLO is defined and achievable with current architecture
+- [ ] Error budgets are defined per hard constraint with documented alert thresholds
+
+**Monitoring gates:**
+- [ ] Infrastructure monitoring is active (latency, error rates, cost, throughput)
+- [ ] Model behavior monitoring is active (daily automated eval, output distribution tracking)
+- [ ] Data distribution monitoring is active (query topic/complexity tracking)
+- [ ] Alerting thresholds are configured and routed to the on-call team
+
+**Incident response gates:**
+- [ ] Rollback procedure is documented for each level (prompt, model, feature, full)
+- [ ] Rollback has been tested within the last quarter
+- [ ] The fallback model has been re-validated within the last quarter
+- [ ] On-call responsibilities are assigned and documented
+
+**Business gates:**
+- [ ] Cost projections exist for current volume and 3 growth scenarios
 - [ ] Pricing risk is mitigated (fallback provider, contractual terms reviewed)
-- [ ] Latency under load has been estimated (queuing model or load test)
-- [ ] Data freshness SLO is defined and achievable with current retrieval architecture
 - [ ] The decision record is complete and reviewed by at least one stakeholder
+- [ ] Re-evaluation triggers are defined and monitored
 
 ### 1.10 Chapter summary and checklist
 
 This chapter established a procedure for translating product requirements into a defensible model selection decision.
 The key contribution is the separation of the problem into sequential stages—constraint specification, landscape mapping, baseline sweep, scoring, sensitivity analysis, cost modeling, and production readiness—each of which produces an auditable artifact.
 
-The following checklist summarizes the procedure.
-It is intended to be used as a working document during the model selection process, not merely as a post-hoc verification.
+The procedure is designed to be **reusable across AI products**, not specific to the RA.
+The RA was used throughout as an instantiation of the general procedure, demonstrating how abstract principles translate into concrete decisions.
+A product manager building a different AI product (a customer support agent, a code generation tool, a medical Q&A system) would follow the same stages with different constraints, different candidate models, and different production requirements—but the reasoning structure is identical.
+
+**Key principles established in this chapter:**
+
+1. **Model selection is a constraint satisfaction problem, not an optimization problem.** The first task is to eliminate candidates that violate hard constraints, not to find the "best" model on aggregate metrics. Mixing hard and soft constraints in a single scoring function can mask disqualifying failures.
+
+2. **Requirements must be operationalized before they are useful.** "Accurate" is not a requirement; "citation precision ≥0.85 on eval-v1.0" is a requirement. Operationalization forces clarity about what is being measured, what passes, and how measurement is conducted.
+
+3. **Fair comparison requires controlled conditions.** Models must be evaluated under identical system configurations (same retrieval pipeline, same tools, same prompts) to isolate model capability from system design. Uncontrolled comparisons measure engineering effort, not model quality.
+
+4. **Sensitivity analysis is not optional.** A decision that reverses under plausible perturbations to weights, thresholds, or cost assumptions is not robust. Documenting sensitivity conditions enables principled re-evaluation when circumstances change.
+
+5. **Cost modeling must extend beyond per-query estimates.** Usage distribution, scaling projections, hosting crossover analysis, and pricing risk assessment are required to ensure the model selection remains viable as the product grows.
+
+6. **Evaluation performance does not predict production performance.** Distribution shift, adversarial inputs, infrastructure variance, and temporal drift systematically degrade production quality. The production readiness gate addresses these factors through availability engineering, monitoring, error budgets, and incident response.
+
+7. **The decision record is the primary artifact.** The output of model selection is not a model name but a documented reasoning chain that enables auditability, reversibility, and institutional memory.
+
+**The complete model selection procedure:**
+
+The following checklist synthesizes the full procedure into a working document.
+It is intended to be used as a living checklist during the model selection process, updated as each stage is completed, and preserved as part of the decision record.
 
 **Stage 1: Constraint specification**
-- [ ] Product requirements are enumerated and classified as hard or soft
-- [ ] Each requirement is operationalized with a metric, threshold, population, and measurement procedure
-- [ ] Hard and soft constraints are validated with stakeholders
+- [ ] Product requirements are enumerated from stakeholder interviews and user research
+- [ ] Each requirement is classified as hard (violation → elimination) or soft (optimize)
+- [ ] Each requirement is operationalized with: metric, threshold, population, measurement procedure
+- [ ] Thresholds include documented rationale (why this specific number?)
+- [ ] Hard constraints are validated: would the product be unshippable if this constraint is violated?
 - [ ] Soft constraint weights are assigned using a structured method (e.g., swing weighting)
+- [ ] The constraint set is reviewed and approved by at least one stakeholder outside the ML team
 
 **Stage 2: Landscape mapping**
-- [ ] Hosted and self-hosted candidates are enumerated
-- [ ] Candidates are filtered by obvious disqualifiers (context length, modality, availability)
+- [ ] Hosted API and self-hosted (open-weight) candidates are enumerated
+- [ ] Candidates are filtered by obvious disqualifiers: context length, modality support, regional availability, data governance requirements
 - [ ] A shortlist of 3–5 candidates is established for evaluation
+- [ ] For self-hosted candidates, infrastructure requirements and costs are estimated
 
 **Stage 3: Baseline sweep**
-- [ ] A representative evaluation set exists (≥50 prompts across difficulty tiers)
-- [ ] Metrics aligned with constraints are implemented and automated
-- [ ] Each candidate is evaluated under identical conditions (same retrieval, same tools, same prompts)
-- [ ] Results are recorded with confidence intervals
+- [ ] A representative evaluation set exists (≥50 prompts, ideally 100+, across difficulty tiers)
+- [ ] The evaluation set is versioned (e.g., eval-v1.0)
+- [ ] Metrics aligned with constraints are implemented and automated where possible
+- [ ] Each candidate is evaluated under identical, controlled conditions
+- [ ] Results are recorded with confidence intervals (sample size permitting)
+- [ ] The total cost of the evaluation (API fees, annotation time) is documented
 
 **Stage 4: Decision**
-- [ ] Hard constraints are applied as elimination gates
-- [ ] Soft constraints are scored and weighted
-- [ ] Sensitivity analysis identifies conditions that would reverse the decision
-- [ ] A decision record documents the full reasoning chain
+- [ ] Hard constraints are applied as elimination gates (binary pass/fail)
+- [ ] Eliminated candidates are documented with specific constraint violations
+- [ ] Soft constraints are scored and weighted for surviving candidates
+- [ ] The weighted total is computed and the leading candidate is identified
+- [ ] Sensitivity analysis is performed on: weights, thresholds, cost, measurement uncertainty
+- [ ] Conditions that would reverse the decision are documented explicitly
+- [ ] A decision record is drafted with: context, candidates, evaluation, eliminations, decision, sensitivity, fallback, re-evaluation triggers, risks
 
 **Stage 5: Cost modeling**
-- [ ] Per-query cost is decomposed into components
-- [ ] Usage distribution is modeled (simple/moderate/complex)
+- [ ] Per-query cost is decomposed into components (inference, retrieval, parsing, storage, overhead)
+- [ ] Usage distribution is modeled across complexity tiers (with acknowledged uncertainty)
 - [ ] Monthly costs are projected under 3+ growth scenarios
+- [ ] Revenue model is compared against cost projections (gross margin analysis)
 - [ ] The self-hosting crossover point is calculated (if applicable)
-- [ ] Pricing risk is assessed and mitigated
+- [ ] Pricing risk is assessed: price increase, deprecation, rate limit changes
+- [ ] Mitigation is in place: tested fallback on a different provider
 
 **Stage 6: Production readiness**
-- [ ] Availability target is defined and compound availability is calculated
-- [ ] Error budgets are defined per hard constraint
-- [ ] Monitoring covers infrastructure, model behavior, and data distribution
-- [ ] A tested fallback model exists
-- [ ] Rollback procedure is documented and tested
-- [ ] The readiness checklist is complete
+- [ ] Compound availability is calculated and meets the target (with mitigations documented)
+- [ ] Latency under expected peak load is estimated (queuing model, Little's Law, or load test)
+- [ ] Data freshness SLO is defined and achievable
+- [ ] Error budgets are defined per hard constraint with alert thresholds
+- [ ] Monitoring covers all three levels: infrastructure, model behavior, data distribution
+- [ ] Alerting is configured and routed to responsible parties
+- [ ] Rollback procedures are documented for each level (prompt, model, feature, full)
+- [ ] Rollback has been tested (not just documented)
+- [ ] The fallback model has been re-validated recently
+- [ ] The decision record is finalized and archived
 
-The output of this chapter is not a model name.
-It is a decision system: a set of constraints, an evaluation infrastructure, a decision record, and a production readiness plan that together ensure the model selection is defensible, reversible, and maintainable as the product evolves.
+**What this chapter does not cover.**
+This chapter addresses model *selection*—choosing and validating a model for an AI product.
+It does not address model *customization* (fine-tuning, which is the subject of Chapter 2), *evaluation infrastructure at scale* (which is the subject of Chapter 3), or *system architecture design* (which is the subject of Chapter 4).
+The model selection procedure produces a candidate and a production readiness plan; the subsequent chapters address how to improve that candidate, how to maintain quality over time, and how to build the system around it.
 
 ### References
 
 - Baeza-Yates, R., & Ribeiro-Neto, B. (2011). *Modern Information Retrieval: The Concepts and Technology Behind Search* (2nd ed.). Addison-Wesley.
 - Beyer, B., Jones, C., Petoff, J., & Murphy, N. R. (Eds.). (2016). *Site Reliability Engineering: How Google Runs Production Systems*. O'Reilly Media.
+- Bornmann, L., & Mutz, R. (2015). Growth Rates of Modern Science: A Bibliometric Analysis Based on the Number of Publications and Cited References. *Journal of the Association for Information Science and Technology*, 66(11).
 - Breck, E., Cai, S., Nielsen, E., Salib, M., & Sculley, D. (2017). The ML Test Score: A Rubric for ML Production Readiness and Technical Debt Reduction. *IEEE International Conference on Big Data*.
 - Card, S. K., Robertson, G. G., & Mackinlay, J. D. (1991). The Information Visualizer: An Information Workspace. *ACM CHI*.
+- Clark, K., et al. (2020). ELECTRA: Pre-training Text Encoders as Discriminators Rather Than Generators. *ICLR*.
+- Devlin, J., et al. (2019). BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. *NAACL*.
 - Jain, R. (1991). *The Art of Computer Systems Performance Analysis: Techniques for Experimental Design, Measurement, Simulation, and Modeling*. Wiley.
 - Keeney, R. L., & Raiffa, H. (1993). *Decisions with Multiple Objectives: Preferences and Value Tradeoffs*. Cambridge University Press.
 - Lewis, P., Perez, E., Piktus, A., et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. *NeurIPS*.
+- Liu, Y., et al. (2019). RoBERTa: A Robustly Optimized BERT Pretraining Approach. *arXiv*.
 - Marcus, G., & Davis, E. (2019). *Rebooting AI: Building Artificial Intelligence We Can Trust*. Pantheon.
 - Nygard, K. E., & Kramer, N. (1988). Decision Tables in Software Engineering. *Journal of Systems and Software*, 8(4).
 - OpenAI. (2024). Pricing and Model Deprecation Updates. *OpenAI Platform Documentation*.
@@ -733,9 +1192,6 @@ It is a decision system: a set of constraints, an evaluation infrastructure, a d
 - Saltelli, A., Ratto, M., Andres, T., et al. (2008). *Global Sensitivity Analysis: The Primer*. Wiley.
 - Sculley, D., Holt, G., Golovin, D., et al. (2015). Hidden Technical Debt in Machine Learning Systems. *NeurIPS*.
 - Vaswani, A., et al. (2017). Attention is All You Need. *NeurIPS*.
-- Devlin, J., et al. (2019). BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. *NAACL*.
-- Liu, Y., et al. (2019). RoBERTa: A Robustly Optimized BERT Pretraining Approach. *arXiv*.
-- Clark, K., et al. (2020). ELECTRA: Pre-training Text Encoders as Discriminators Rather Than Generators. *ICLR*.
 
 ---
 
