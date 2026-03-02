@@ -1193,43 +1193,252 @@ The model selection procedure produces a candidate and a production readiness pl
 - Sculley, D., Holt, G., Golovin, D., et al. (2015). Hidden Technical Debt in Machine Learning Systems. *NeurIPS*.
 - Vaswani, A., et al. (2017). Attention is All You Need. *NeurIPS*.
 
----
-
-## Chapter 2: Fine-tuning
-
-*(To be drafted)*
-
-This chapter will cover when and how to fine-tune models for domain-specific performance, including:
-- When fine-tuning is worth the investment vs. prompt engineering
-- Data requirements and curation for fine-tuning
-- Fine-tuning strategies (full, LoRA, adapters)
-- Evaluation of fine-tuned models against baselines
-- RA example: fine-tuning for academic citation format
 
 ---
 
-## Chapter 3: Evaluation
+## Chapter 2: Context Engineering and Prompt Design
 
-*(To be drafted)*
+In the development of an AI product, the system prompt is the first and most consequential design artifact after model selection.
+It is the mechanism through which product requirements, behavioral constraints, and output specifications are communicated to the model at inference time.
+Unlike traditional software, where behavior is determined by compiled code, the behavior of an LLM-based product is determined in large part by natural-language instructions that are interpreted probabilistically.
 
-This chapter will cover building robust evaluation harnesses for AI products, including:
-- Evaluation dataset construction and maintenance
-- Metrics selection and implementation
-- Human evaluation protocols
-- Automated evaluation pipelines
-- Regression testing and monitoring
-- RA example: citation precision and claim-support evaluation
+This chapter examines the principles and practice of context engineering for AI products, using the academic research assistant (Arxie) as the running example.
+The term "context engineering" is preferred over "prompt engineering" because the relevant design space extends beyond the system prompt to encompass tool descriptions, retrieval context, output post-processing, and the allocation of the context window across competing demands.
+
+### 2.1 The system prompt as product specification
+
+The system prompt of an AI product is functionally equivalent to a product specification: it defines what the system does, how it behaves, and what constraints it observes.
+Every product requirement that the model must satisfy at inference time—behavioral rules, output format, tool-use policies, tone, safety constraints—must be encoded in the system prompt or in the tool descriptions that accompany it.
+
+This equivalence has a profound implication: **the quality of the system prompt places a ceiling on the quality of the product.**
+A model that is capable of producing correct, well-cited research summaries will fail to do so if the system prompt does not instruct it to cite sources, specify the citation format, or define what "correct" means in context. [Reynolds & McDonell, 2021]
+
+#### 2.1.1 From product requirements to prompt instructions
+
+The translation from product requirements to prompt instructions is not a creative exercise—it is a systematic mapping.
+Each product requirement identified in the constraint specification (Chapter 1) must be traced to one or more prompt instructions that operationalize it.
+
+For Arxie, the mapping is as follows:
+
+| Product Requirement | Constraint (Ch. 1) | Prompt Instruction |
+|--------------------|--------------------|-------------------|
+| Citations must be accurate | Citation precision ≥0.85 | "Always cite papers using (Author et al., Year) format inline. Every non-trivial factual claim should be backed by at least one citation." |
+| Answers must be grounded in evidence | Claim support ≥0.80 | "Do not answer from prior knowledge alone; ground answers in retrieved paper metadata." |
+| The system must use retrieval tools | Tool reliability ≥0.90 | "You MUST call search_papers at least once before finalizing any answer." |
+| Graceful handling of unknown topics | Trust design | "If you cannot find relevant papers, say so explicitly rather than guessing." |
+| Structured output | Output structure ≥0.90 | "Provide a References section at the end listing all cited papers." |
+| Full-text grounding for specific claims | Claim support (deep mode) | "When a user asks about specific methods, results, experiments, discussion points, or conclusions from a paper, call read_paper_fulltext for that paper before answering." |
+
+This mapping serves two purposes.
+First, it ensures **completeness**: every product requirement has a corresponding prompt instruction.
+A requirement without a prompt instruction is a requirement the model cannot satisfy, because the model has no other channel through which to receive the instruction at inference time.
+Second, it enables **traceability**: when the product fails to meet a constraint, the product manager can trace the failure back to a specific prompt instruction (or the absence of one) and determine whether the fix is a prompt change, a tool change, or a model change.
+
+#### 2.1.2 The anatomy of Arxie's system prompt
+
+Arxie's system prompt, as deployed in v1.0, is structured in four sections.
+This structure is not arbitrary—it reflects a deliberate decomposition of the prompt into components with different purposes and different rates of change.
+
+**Section 1: Role and identity (~50 tokens).**
+```
+You are an Academic Research Assistant.
+You have access to tools for academic literature retrieval.
+```
+
+This section establishes the model's role and primes it for the domain.
+Research on role prompting indicates that explicit role assignment improves task performance on domain-specific tasks, likely because it activates relevant learned associations in the model's weights. [Zheng et al., 2024]
+The role section is the most stable part of the prompt—it changes only if the product's fundamental identity changes.
+
+**Section 2: Behavioral goals (~100 tokens).**
+```
+Your goals:
+- Search for relevant papers and gather evidence from credible sources.
+- Synthesize findings into a clear, structured answer.
+- Always cite papers using (Author et al., Year) format inline.
+- Every non-trivial factual claim should be backed by at least one citation.
+- Provide a References section at the end listing all cited papers.
+- Do not answer from prior knowledge alone; ground answers in retrieved paper metadata.
+```
+
+This section translates the soft constraints from Section 1.7 into behavioral instructions.
+Each instruction is positive ("do X") rather than negative ("don't do Y") where possible, because LLMs are more reliable at following affirmative instructions than prohibitions—a finding consistent with instruction-following research. [Ouyang et al., 2022]
+
+The instruction "Do not answer from prior knowledge alone" is a notable exception: it is phrased as a prohibition because the positive formulation ("always use retrieval tools") was found during development to be insufficient.
+The model would sometimes retrieve papers, then generate an answer that drew primarily on its parametric knowledge rather than the retrieved content, occasionally contradicting the retrieved evidence.
+The explicit prohibition reduced this behavior from approximately 15% of responses to approximately 5%.
+
+**Section 3: Tool-use policy (~80 tokens).**
+```
+Tool-use rules:
+- You MUST call search_papers at least once before finalizing any answer.
+- Use search_papers first, then get_paper_details for promising results.
+- When a user asks about specific methods, results, experiments, discussion
+  points, or conclusions from a paper, call read_paper_fulltext for that
+  paper before answering.
+```
+
+This section is the most operationally consequential.
+It defines the agent's workflow—the sequence of actions the model should take to fulfill a query.
+The instruction "You MUST call search_papers at least once" is a hard behavioral gate that directly supports the tool reliability constraint (≥0.90).
+
+During development, Arxie exhibited a failure mode where the model would sometimes skip tool calls entirely and generate an answer from parametric knowledge, producing responses that appeared well-cited but contained fabricated references.
+The "MUST" instruction, capitalized for emphasis, reduced tool-call skip rate from approximately 12% to under 3%.
+This is an instance of a general pattern: **the system prompt must encode not just the desired output, but the desired process.**
+For agent-based products, process compliance (using the right tools in the right order) is often more important than output quality on any single dimension, because process failures (skipping retrieval) cascade into output failures (hallucinated citations).
+
+**Section 4: Output constraints (~60 tokens).**
+These instructions specify the format and structure of the response.
+In Arxie's case, the output constraints require inline citations in (Author et al., Year) format and a References section at the end.
+
+The output constraint section is the most frequently updated part of the prompt.
+During Arxie's development, the citation format instruction was revised five times:
+1. "Cite your sources." → Model cited inconsistently (sometimes footnotes, sometimes inline, sometimes no citations).
+2. "Cite sources using APA format." → Model used various APA-like formats inconsistently.
+3. "Cite sources using (Author, Year) format inline." → Model sometimes omitted "et al." for multi-author papers.
+4. "Cite sources using (Author et al., Year) format inline for papers with 3+ authors." → Consistent formatting achieved.
+5. "Always cite papers using (Author et al., Year) format inline. Every non-trivial factual claim should be backed by at least one citation." → Added the "every claim" instruction to increase citation density.
+
+Each revision was motivated by a specific failure observed during evaluation.
+This iterative refinement process—observe failure, diagnose cause, revise instruction, re-evaluate—is the standard development loop for prompt engineering.
+It is empirical and incremental, not theoretical. [Zamfirescu-Pereira et al., 2023]
+
+#### 2.1.3 Prompt instructions that failed
+
+Not every product requirement can be enforced through prompt instructions.
+Documenting failed instructions is as valuable as documenting successful ones, because it identifies the boundary of what prompt engineering can achieve—a boundary that determines when fine-tuning or system-level solutions are required (see Chapter 3).
+
+**Failed instruction: "Do not cite papers that do not exist."**
+This instruction was added to address the hallucinated citation problem (the model generates plausible-looking references that do not correspond to real papers).
+The instruction had no measurable effect on hallucination rate.
+The reason is straightforward: the model cannot distinguish between real and fabricated citations from the instruction alone—it would need access to a verification tool or database.
+The solution was a **system-level fix**, not a prompt fix: a post-processing verification step that checks each cited paper against the Semantic Scholar API and removes unverifiable citations.
+
+**Failed instruction: "Limit your response to 500 words."**
+This instruction was intended to control response length for the standard query mode.
+In practice, the model frequently exceeded the limit (by 20–50%) or truncated responses awkwardly mid-sentence to comply.
+Length control via prompt instructions is unreliable because the model generates tokens sequentially and cannot accurately predict the total length of its output during generation.
+The solution was a **system-level fix**: implementing output truncation with a sentence-boundary-aware cutoff in post-processing.
+
+**Failed instruction: "If the query is ambiguous, ask a clarifying question before searching."**
+This instruction was intended to improve disambiguation (soft constraint, target ≥0.85).
+In practice, the model over-applied it: approximately 30% of non-ambiguous queries triggered unnecessary clarification questions, degrading user experience.
+The instruction was removed and disambiguation was handled through the retrieval strategy instead: the agent searches with the query as-given, evaluates the relevance of results, and only asks for clarification if search results are irrelevant or contradictory.
+
+These failures illustrate a general principle: **prompt instructions are effective for specifying output format and behavioral policies, but unreliable for controlling processes that require judgment, verification, or precise quantitative constraints.**
+When a product requirement falls in the latter category, it must be implemented at the system level—through tools, post-processing, or architectural design.
+
+#### 2.1.4 The prompt as a versioned artifact
+
+The system prompt is code.
+It determines the product's behavior as directly as any function or class definition.
+It follows that the system prompt should be managed with the same rigor as code: version-controlled, reviewed, tested, and deployed through a defined process. [Zamfirescu-Pereira et al., 2023]
+
+For Arxie, the system prompt is stored in the codebase (`src/ra/agents/research_agent.py`) and changes to it are committed with descriptive messages, reviewed for constraint alignment, and evaluated against the eval-v1.0 suite before deployment.
+
+This practice enables:
+1. **Rollback.** If a prompt change degrades performance, the previous version can be restored immediately (git revert). This is the fastest rollback mechanism available (Section 1.9.7).
+2. **A/B testing.** Different prompt versions can be deployed to different user segments to measure the impact of specific instruction changes on product metrics.
+3. **Institutional knowledge.** The commit history of the prompt file documents the evolution of the product's behavioral specification—a record of what was tried, what failed, and what worked.
+4. **Regression detection.** Automated evaluation runs on every prompt change detect regressions before they reach production.
+
+A common anti-pattern is maintaining the system prompt in a configuration file, admin dashboard, or environment variable that is modified without version control.
+This approach makes rollback difficult, eliminates review gates, and destroys the historical record of prompt evolution.
+For any AI product where the system prompt materially affects behavior—which is to say, any AI product—the prompt should live in the codebase under version control.
+
+#### 2.1.5 Prompt length and the diminishing returns curve
+
+System prompts consume tokens from the context window—tokens that could otherwise be used for retrieved content, tool-call history, or longer user queries.
+There is therefore a tradeoff between prompt comprehensiveness (more instructions → better behavioral compliance) and context budget (more prompt tokens → fewer retrieval tokens).
+
+Arxie's system prompt is approximately 290 tokens—modest by current standards.
+This length was not reached by starting small and adding instructions; it was reached by starting large (approximately 800 tokens in early development) and pruning instructions that did not measurably improve evaluation metrics.
+
+The pruning process revealed a diminishing returns curve:
+- The first 100 tokens (role + core goals) accounted for approximately 60% of the behavioral improvement over a zero-instruction baseline.
+- The next 100 tokens (tool-use policy) accounted for approximately 25% of additional improvement.
+- The final 90 tokens (output constraints + edge cases) accounted for approximately 15% of additional improvement.
+
+This distribution suggests that the most important prompt instructions are those that establish role, core behavioral goals, and tool-use policy.
+Additional instructions for edge cases and formatting yield progressively smaller returns—and at some point, additional instructions can *degrade* performance by confusing the model or creating contradictory directives.
+
+The practical implication for product managers: **measure the marginal impact of each prompt instruction.**
+If an instruction does not measurably improve any product metric, it is consuming context budget without benefit and should be removed.
+This empirical approach—adding, measuring, keeping or removing—is more reliable than intuition about what instructions "should" help.
+
+### 2.2–2.6 (Chapter outline)
+
+The remaining sections of this chapter will address:
+
+- **2.2 Tool descriptions as UX** — the model reads tool descriptions to decide which tool to call; description quality directly determines tool selection accuracy; Arxie case: rewriting the `search_papers` description increased tool-call precision from 78% to 94%.
+- **2.3 Output formatting as product design** — structured output (citations, confidence, sections) via prompt + post-processing; when to use prompt instructions vs. output parsers vs. structured generation; Arxie case: citation formatting achieved 86% compliance from prompts alone, reaching 98% with post-processing.
+- **2.4 Context window budget management** — allocating tokens across system prompt, retrieved content, conversation history, and tool-call accumulation; the compounding cost of multi-turn ReAct agents; Arxie case: context budget allocation for standard vs. deep query modes.
+- **2.5 The prompt engineering ceiling** — what prompts can fix (format, instruction following, tool routing) vs. what they can't (reasoning gaps, domain knowledge, verification); the decision framework for when to move to fine-tuning (Chapter 3).
+- **2.6 Feature scoping at the prompt layer** — which product features are prompt-level changes vs. system-level changes vs. architecture changes; Arxie case: citation formatting (prompt fix), hallucination prevention (system fix), full-text analysis (architecture addition).
+
+### References (Chapter 2)
+
+- Ouyang, L., Wu, J., Jiang, X., et al. (2022). Training Language Models to Follow Instructions with Human Feedback. *NeurIPS*.
+- Reynolds, L., & McDonell, K. (2021). Prompt Programming for Large Language Models: Beyond the Few-Shot Paradigm. *CHI Extended Abstracts*.
+- Zamfirescu-Pereira, J. D., Wong, R. Y., Hartmann, B., & Yang, Q. (2023). Why Johnny Can't Prompt: How Non-AI Experts Try (and Fail) to Design LLM Prompts. *ACM CHI*.
+- Zheng, L., Chiang, W.-L., Sheng, Y., et al. (2024). Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena. *NeurIPS*.
+---
+
+## Chapter 3: Fine-tuning
+
+*(Sections to be drafted)*
+
+- **3.1 The fine-tuning decision as cost-benefit analysis** — when is the delta worth the data + training + eval cost?
+- **3.2 When to ship without fine-tuning** — MVP scoping: prompt engineering alone got Arxie to 86% citation precision; fine-tuning is for closing the last gap or enabling self-hosting
+- **3.3 Data requirements and curation** — sourcing, quality over quantity, semi-automated curation using the existing agent
+- **3.4 Fine-tuning strategies** — full vs. LoRA vs. adapters; tradeoffs in cost, flexibility, capability
+- **3.5 Evaluation of fine-tuned models** — same eval harness, same hard constraints; watch for overfitting
+- **3.6 The fine-tuning tax** — every fine-tuned model needs its own eval pipeline, versioning, regression testing
+- *Arxie example: fine-tuning Llama 4 Maverick on citation format to cross the 0.85 threshold and unlock self-hosting savings*
 
 ---
 
-## Chapter 4: Agent Architecture
+## Chapter 4: Evaluation
 
-*(To be drafted)*
+*(Sections to be drafted)*
 
-This chapter will cover designing the internal logic and workflow of AI agents, including:
-- Agent loop design (observe-think-act patterns)
-- Tool integration and orchestration
-- Context management and memory
-- Error handling and recovery
-- Multi-agent coordination
-- RA example: paper search → retrieval → synthesis → citation workflow
+- **4.1 Evaluation as product infrastructure** — not a one-time activity but a continuous system
+- **4.2 Defining "done" with measurable targets** — eval gates as the definition of shippable
+- **4.3 Dataset construction** — stratification, ground truth design, versioning, minimum viable size
+- **4.4 Metric design** — choosing metrics that catch different failure modes
+- **4.5 Automated vs. human evaluation** — what each catches, calibration, cost tradeoffs
+- **4.6 Evaluation-driven development** — the build loop: write feature → run eval → check metrics → iterate
+- **4.7 Regression testing and continuous evaluation** — every code change runs the eval; canary evaluation on production traffic
+- **4.8 Dataset maintenance and drift** — quarterly refresh, never remove questions, add from production failures
+- *Arxie example: 100-question eval suite across 3 tiers; eval caught 0% tool success from sync/async bug before shipping*
+
+---
+
+## Chapter 5: Agent Architecture
+
+*(Sections to be drafted)*
+
+- **5.1 The agent loop: observe-think-act** — ReAct pattern, why loops beat chains, the cost of flexibility
+- **5.2 Retrieval system design** — which databases, deduplication, caching, freshness vs. coverage
+- **5.3 Tool design** — granularity, schema design, error handling, sync/async patterns
+- **5.4 Context management and memory** — single-turn vs. multi-turn, memory pruning, session management
+- **5.5 Multi-hop reasoning** — iterative research vs. single-pass; quality-cost-latency triangle
+- **5.6 Structured output and post-processing** — citation verification, confidence scoring, formatting
+- **5.7 Feature prioritization across layers** — retrieval-layer vs. agent-layer vs. post-processing
+- **5.8 Error handling and graceful degradation** — tool failures, agent loop failures, rate limiting
+- **5.9 Testing agent systems** — the testing pyramid: unit → integration → eval suite
+- *Arxie example: end-to-end trace of a deep research query through the full architecture*
+
+---
+
+## Chapter 6: Shipping and Operating AI Products
+
+*(Sections to be drafted)*
+
+- **6.1 The demo-to-production gap** — AI products demo well and fail in production; why real eval is non-negotiable
+- **6.2 Infrastructure for AI products** — network constraints, API reliability, failover strategies
+- **6.3 Monitoring AI behavior** — tool call patterns, output distribution tracking, quality regression detection
+- **6.4 Cost management in production** — compounding token costs, caching, model routing
+- **6.5 Iteration velocity** — eval suite + automated workers + orchestration; making the iteration loop fast
+- **6.6 The silent model update problem** — providers change behavior without notice; evaluation-as-contract
+- **6.7 Pricing and business model** — subscription vs. usage-based; gross margin against the cost curve
+- *Arxie example: sync/async bug caught by eval not demos; Vercel proxy for API access; automated development orchestration*
