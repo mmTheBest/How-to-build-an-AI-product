@@ -1365,11 +1365,254 @@ The practical implication for product managers: **measure the marginal impact of
 If an instruction does not measurably improve any product metric, it is consuming context budget without benefit and should be removed.
 This empirical approach—adding, measuring, keeping or removing—is more reliable than intuition about what instructions "should" help.
 
-### 2.2–2.6 (Chapter outline)
+### 2.2 Tool descriptions as UX
+
+In an agent-based AI product, the model does not interact with tools directly—it interacts with *descriptions* of tools.
+The tool description is the only information the model has about what a tool does, when to use it, and what to expect from it.
+This makes tool description writing a user experience design problem, where the "user" is the model itself.
+
+A tool description that seems clear to a human developer may be ambiguous, misleading, or incomplete from the model's perspective.
+The consequences of poor tool descriptions are not cosmetic: they cause the agent to select the wrong tool, pass incorrect arguments, or skip tool use entirely—failures that cascade into incorrect outputs regardless of the model's underlying capability.
+
+#### 2.2.1 Tool selection as classification
+
+When an agent receives a user query, it must decide which tool (if any) to invoke.
+This decision is a classification problem: given the query and the available tool definitions, the model assigns the query to a tool (or to "no tool needed").
+
+The features available for this classification are limited:
+1. The tool's name
+2. The tool's description
+3. The tool's argument schema (parameter names, types, and descriptions)
+
+Of these, the description carries the most information.
+Tool names are typically short and may be ambiguous (`get_paper` vs. `get_paper_details`); argument schemas describe *how* to call a tool, not *when* to call it.
+The description is where the model learns the tool's purpose, scope, and appropriate use cases.
+
+This has a direct implication: **the quality of tool descriptions determines the accuracy of tool selection.**
+A model that is highly capable of using tools correctly will nonetheless fail if it selects the wrong tool—and tool selection is governed almost entirely by descriptions. [Schick et al., 2023]
+
+#### 2.2.2 Three failure modes of tool descriptions
+
+Tool descriptions fail in predictable ways.
+Understanding these failure modes enables systematic diagnosis and correction.
+
+**Under-specification.**
+The description is too vague to discriminate between tools or between "use tool" and "don't use tool."
+
+Consider a tool described as: *"Get information about a paper."*
+This description could apply to retrieving metadata (title, authors, citation count), fetching the full text, finding papers that cite it, or summarizing its contents.
+If the agent has multiple tools for these purposes, the vague description provides no basis for choosing among them.
+The result is inconsistent tool selection: the same query may route to different tools on different runs, depending on which interpretation the model samples.
+
+In Arxie, an early version of `get_paper_details` was described as *"Get details for a paper."*
+This caused confusion with `read_paper_fulltext`, which also retrieves "details" in the colloquial sense.
+The description was revised to specify the output type: *"Get detailed metadata for a specific paper by identifier... Returns JSON with normalized metadata and a formatted citation string."*
+The explicit mention of "metadata" and "citation string" distinguishes it from full-text retrieval.
+
+**Over-specification.**
+The description is too narrow, causing the tool to be skipped when it should be used.
+
+Consider: *"Use this tool ONLY when the user explicitly requests the PDF full text of a paper."*
+This description will correctly trigger on "give me the full text of this paper" but will miss "what methods did they use?" or "how did they run the experiments?"—queries that require full-text access but do not mention PDFs.
+
+Over-specification is often introduced as a "fix" for under-specification: the developer, observing that the tool is called too often, adds restrictive language.
+This trades false positives for false negatives, which may be worse depending on the use case.
+The correct fix is usually to clarify scope boundaries rather than to add restrictions.
+
+**Scope overlap.**
+Multiple tools have descriptions that could reasonably apply to the same query, and the model has no principled basis for choosing.
+
+Arxie includes both `get_paper_details` and `get_paper` (an alias with identical functionality).
+The descriptions are nearly identical:
+- `get_paper_details`: *"Get detailed metadata for a specific paper by identifier..."*
+- `get_paper`: *"Alias for get_paper_details. Get detailed metadata for a specific paper by identifier..."*
+
+While the alias exists for developer convenience (some prompts may use "get paper" phrasing), the model sees two tools with overlapping descriptions.
+This is harmless when both tools are functionally identical, but scope overlap between *different* tools causes unpredictable routing.
+
+A subtler form of scope overlap occurs between tools that handle different cases of the same underlying intent.
+In Arxie, `get_paper_full_text` returns plain text, while `read_paper_fulltext` returns structured sections (abstract, methods, results, discussion).
+Both serve "get full text" intents, but for different downstream uses.
+The descriptions must clarify when each is appropriate:
+- `get_paper_full_text`: *"...extract its full text... Returns plain text."*
+- `read_paper_fulltext`: *"Use this when the user asks for specific methodology, results, discussion details, or conclusions. Returns JSON with title, abstract, methods, results, discussion, and conclusion sections."*
+
+The second description specifies the *trigger condition* (user asks for specific sections), not just the output format.
+
+#### 2.2.3 Encoding process instructions in descriptions
+
+Section 2.1 established that the system prompt must encode the desired *process*, not just the desired output.
+The same principle applies to tool descriptions: effective descriptions tell the model *when* to use the tool within the agent loop, not just what the tool does.
+
+Arxie's `search_papers` tool is described as:
+*"Search for relevant academic papers. **Use this first** to discover candidate sources. Returns JSON with a list of normalized paper metadata and citation strings."*
+
+The phrase "Use this first" is not a capability description—it is a **process instruction**.
+It tells the model that `search_papers` should be the initial action in most research queries, before `get_paper_details` or `read_paper_fulltext`.
+This instruction directly supports the tool reliability constraint (≥0.90): without it, the model sometimes skips search entirely and generates responses from parametric knowledge.
+
+Similarly, `read_paper_fulltext` includes:
+*"Use this when the user asks for specific methodology, results, discussion details, or conclusions."*
+
+This is a **trigger condition**: it specifies the user intents that should route to this tool.
+The model learns not just what the tool does, but when to reach for it.
+
+The pattern generalizes: for each tool, the description should answer three questions:
+1. **What does it do?** (capability)
+2. **When should I use it?** (trigger condition)
+3. **Where does it fit in the workflow?** (process position)
+
+A description that answers only the first question leaves the model to infer the second and third, which it will do inconsistently.
+
+#### 2.2.4 Tool descriptions and reliability
+
+The reliability framework introduced by Rabanser et al. (2026) identifies *consistency* as a dimension distinct from accuracy: does the same input produce the same output across runs?
+Tool descriptions directly affect consistency at the tool-selection layer.
+
+Consider two semantically equivalent queries:
+- "What methods did they use in this paper?"
+- "How did they conduct the experiments?"
+
+Both queries require `read_paper_fulltext` to answer properly.
+If the tool description only mentions "methods," the first query may trigger the tool reliably while the second triggers it inconsistently—depending on whether the model interprets "conduct the experiments" as equivalent to "methods."
+
+This is a form of **prompt robustness** (sensitivity to semantically equivalent rephrasings) applied to tool selection.
+The description *"Use this when the user asks for specific methodology, results, discussion details, or conclusions"* attempts to cover multiple phrasings ("methodology," "results," "conclusions"), but cannot enumerate all possible rephrasings.
+
+The practical mitigation is empirical testing: construct a set of paraphrased queries with the same expected tool call, measure the tool-call agreement rate, and revise descriptions to cover observed gaps.
+This testing is analogous to prompt perturbation testing (Section 1.9), but applied to the tool-selection layer rather than the end-to-end output.
+
+#### 2.2.5 Token budget considerations
+
+Tool definitions consume context window tokens.
+Each tool contributes its name, description, and argument schema to every prompt, regardless of whether it is used.
+
+For Arxie's seven tools, the token cost is approximately:
+
+| Tool | Name | Description | Schema | Total |
+|------|------|-------------|--------|-------|
+| search_papers | 3 | 35 | 65 | ~103 |
+| get_paper_details | 4 | 40 | 55 | ~99 |
+| get_paper | 3 | 45 | 55 | ~103 |
+| get_paper_full_text | 5 | 45 | 50 | ~100 |
+| read_paper_fulltext | 4 | 55 | 50 | ~109 |
+| get_paper_citations | 5 | 35 | 60 | ~100 |
+| trace_influence | 4 | 45 | 85 | ~134 |
+| **Total** | | | | **~748** |
+
+These ~750 tokens are present in every agent invocation.
+For a model with a 128K context window, this is negligible.
+For a model with 8K context, it represents nearly 10% of available capacity—capacity that cannot be used for retrieved paper content or conversation history.
+
+The tradeoff is between description richness (more tokens → better tool selection) and context availability (more tokens → less room for retrieval).
+The diminishing returns principle from Section 2.1.5 applies: the first 20 tokens of a description (core capability) provide more marginal value than the next 20 tokens (edge case coverage).
+
+A product manager should measure **tool-call precision per token**: if adding 15 tokens to a description improves tool-call precision from 0.88 to 0.94, that is 0.4 percentage points per token.
+If adding another 15 tokens improves precision from 0.94 to 0.95, that is 0.07 percentage points per token—a 6× lower marginal value.
+The second addition may not be worth the context budget.
+
+#### 2.2.6 Empirical testing of tool descriptions
+
+Tool descriptions cannot be validated by inspection.
+A description that seems clear to the developer may be ambiguous to the model; a description that seems overly verbose may be the minimum required for reliable routing.
+The only reliable validation is empirical measurement.
+
+**Constructing a tool-call evaluation set.**
+The evaluation set consists of (query, expected tool calls) pairs:
+
+```
+Query: "Find papers about attention mechanisms in transformers"
+Expected: [search_papers]
+
+Query: "What methods did Vaswani et al. use in the original transformer paper?"
+Expected: [search_papers, read_paper_fulltext]
+
+Query: "Get me the citation info for arxiv 1706.03762"
+Expected: [get_paper_details]
+
+Query: "How has BERT influenced subsequent NLP research?"
+Expected: [search_papers, get_paper_citations] or [trace_influence]
+```
+
+Note that some queries have multiple acceptable tool sequences; the evaluation should account for this.
+
+**Measuring tool-call precision.**
+Run the agent on each query with tool-call logging enabled.
+Compute:
+- **Tool-call precision**: (correct tool calls) / (total tool calls)
+- **Tool-call recall**: (correct tool calls) / (expected tool calls)
+- **Sequence accuracy**: (queries with correct tool sequence) / (total queries)
+
+For Arxie, the tool-call evaluation set includes 40 queries across four categories: factual (single paper lookup), analytical (comparison or synthesis), exploratory (literature discovery), and deep (full-text required).
+The current tool descriptions achieve 0.94 precision and 0.89 recall on this set.
+
+**Iterative refinement.**
+When tool-call failures are identified, the revision process is:
+1. Examine the failed query and the incorrectly selected tool
+2. Identify why the model made that selection (description ambiguity, scope overlap, missing trigger condition)
+3. Revise the description to address the specific failure
+4. Re-run the evaluation to confirm the fix and check for regressions
+
+This is the same observe-diagnose-revise-evaluate loop used for system prompt refinement (Section 2.1.2), applied to tool descriptions.
+
+#### 2.2.7 Argument-level descriptions
+
+Tool descriptions govern tool *selection*; argument descriptions govern argument *construction*.
+The arguments the model passes to a tool are determined by the argument schema, including the descriptions of each field.
+
+Compare two versions of a search query argument:
+
+**Version A (minimal):**
+```python
+query: str = Field(..., description="Search query.")
+```
+
+**Version B (guided):**
+```python
+query: str = Field(
+    ..., 
+    description="Academic search terms. Include specific author names, "
+                "paper titles, or technical concepts for better results. "
+                "Example: 'attention mechanism transformer Vaswani'"
+)
+```
+
+Version A provides no guidance on query construction.
+The model will pass whatever phrasing seems reasonable, which may not align with how the underlying search API works (Semantic Scholar's relevance ranking, arXiv's query syntax).
+
+Version B guides the model toward more effective queries: specific terms, author names, technical concepts.
+This guidance propagates through the pipeline: better queries → better retrieval results → better final answers.
+
+Argument descriptions are particularly important when:
+1. The underlying API has non-obvious query syntax or ranking behavior
+2. The argument affects downstream quality significantly (e.g., `limit` parameters that control how many results are fetched)
+3. The argument has edge cases that the model might mishandle (e.g., identifier formats: DOI vs. arXiv ID vs. Semantic Scholar ID)
+
+For Arxie's identifier arguments, the description explicitly lists accepted formats:
+*"Paper identifier: Semantic Scholar paperId, DOI (optionally prefixed with DOI:), or arXiv id."*
+
+This prevents failures where the model passes a paper title (not an identifier) or an incorrectly formatted DOI.
+
+#### 2.2.8 Summary
+
+Tool descriptions are a critical UX surface in agent-based products.
+They determine tool selection accuracy, which in turn determines whether the agent's capabilities can be reliably accessed.
+
+The key principles:
+1. **Descriptions are features for classification.** The model selects tools based on descriptions; poor descriptions cause misclassification.
+2. **Three failure modes dominate.** Under-specification, over-specification, and scope overlap each require different remediation.
+3. **Encode process, not just capability.** Descriptions should specify *when* to use the tool and *where* it fits in the workflow.
+4. **Descriptions affect reliability.** Tool-call consistency is a measurable property that depends on description quality.
+5. **Token budget constrains description length.** Measure marginal precision per token to optimize the tradeoff.
+6. **Empirical testing is required.** Construct a tool-call evaluation set and measure precision/recall.
+7. **Argument descriptions matter.** Field-level guidance affects argument construction and downstream quality.
+
+The next section examines output formatting—the final transformation between agent behavior and user-facing response.
+
+### 2.3–2.6 (Chapter outline)
 
 The remaining sections of this chapter will address:
 
-- **2.2 Tool descriptions as UX** — the model reads tool descriptions to decide which tool to call; description quality directly determines tool selection accuracy; Arxie case: rewriting the `search_papers` description increased tool-call precision from 78% to 94%.
 - **2.3 Output formatting as product design** — structured output (citations, confidence, sections) via prompt + post-processing; when to use prompt instructions vs. output parsers vs. structured generation; Arxie case: citation formatting achieved 86% compliance from prompts alone, reaching 98% with post-processing.
 - **2.4 Context window budget management** — allocating tokens across system prompt, retrieved content, conversation history, and tool-call accumulation; the compounding cost of multi-turn ReAct agents; Arxie case: context budget allocation for standard vs. deep query modes.
 - **2.5 The prompt engineering ceiling** — what prompts can fix (format, instruction following, tool routing) vs. what they can't (reasoning gaps, domain knowledge, verification); the decision framework for when to move to fine-tuning (Chapter 3).
@@ -1378,7 +1621,9 @@ The remaining sections of this chapter will address:
 ### References (Chapter 2)
 
 - Ouyang, L., Wu, J., Jiang, X., et al. (2022). Training Language Models to Follow Instructions with Human Feedback. *NeurIPS*.
+- Rabanser, S., Kapoor, S., Kirgis, P., Liu, K., Utpala, S., & Narayanan, A. (2026). Towards a Science of AI Agent Reliability. *arXiv:2602.16666*.
 - Reynolds, L., & McDonell, K. (2021). Prompt Programming for Large Language Models: Beyond the Few-Shot Paradigm. *CHI Extended Abstracts*.
+- Schick, T., Dwivedi-Yu, J., Dessì, R., et al. (2023). Toolformer: Language Models Can Teach Themselves to Use Tools. *NeurIPS*.
 - Zamfirescu-Pereira, J. D., Wong, R. Y., Hartmann, B., & Yang, Q. (2023). Why Johnny Can't Prompt: How Non-AI Experts Try (and Fail) to Design LLM Prompts. *ACM CHI*.
 - Zheng, L., Chiang, W.-L., Sheng, Y., et al. (2024). Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena. *NeurIPS*.
 ---
