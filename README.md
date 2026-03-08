@@ -1609,11 +1609,261 @@ The key principles:
 
 The next section examines output formatting—the final transformation between agent behavior and user-facing response.
 
-### 2.3–2.6 (Chapter outline)
+### 2.3 Output formatting as product design
+
+Once an agent selects the right tools and retrieves relevant evidence, a second design problem emerges: how that evidence is packaged for consumption.
+In conventional software products, formatting is often treated as a presentation-layer concern deferred to frontend development.
+In AI products, this separation is weaker.
+The model itself generates the primary output structure, and that structure directly affects trust, usability, and integration.
+
+For this reason, output formatting should be treated as a product design problem, not a cosmetic post-processing step.
+A product manager must specify output behavior with the same rigor used for capability requirements and model constraints.
+
+#### 2.3.1 Output format as interface contract
+
+An AI product output is an interface between three parties:
+1. The user (who reads and interprets the response)
+2. The product logic (which may parse output for downstream actions)
+3. External systems (APIs, exports, dashboards, workflow tools)
+
+An output that is semantically correct but structurally inconsistent can fail all three interfaces.
+A user may misinterpret an unsupported claim as evidenced;
+a downstream parser may fail if section headers vary across runs;
+an integration may break if key fields are omitted or renamed.
+
+This implies that output format is part of the product contract.
+In PRD terms, "the assistant answers correctly" is an incomplete requirement.
+The complete requirement is: "the assistant answers correctly in a structure that supports verification and system interoperability."
+
+Arxie illustrates this distinction.
+Early outputs were free-form paragraphs with occasional inline citations.
+Even when factual quality was acceptable, users reported low trust because they could not quickly map claims to evidence.
+After introducing a structured answer format (claim blocks + inline citations + references section), perceived reliability increased despite marginal changes in underlying model accuracy.
+
+The product implication is clear: **format quality can dominate perceived quality.**
+
+#### 2.3.2 The three-layer output model
+
+A useful design abstraction is to decompose output into three layers:
+
+**Semantic layer (what is being claimed).**
+This layer contains the substantive content: conclusions, comparisons, caveats, and uncertainty.
+Evaluation at this layer asks whether claims are true, relevant, and supported.
+
+**Structural layer (how content is organized).**
+This layer governs human readability: section order, bulleting, citation placement, reference grouping, and summary granularity.
+Evaluation at this layer asks whether users can quickly locate key information and verify it.
+
+**Operational layer (how output can be consumed by systems).**
+This layer governs machine-readability: schema adherence, field completeness, stable key names, and error-state encoding.
+Evaluation at this layer asks whether downstream systems can parse and process output reliably.
+
+The layers are interdependent but not interchangeable.
+A semantic improvement (better claim quality) does not automatically improve structural consistency or operational parseability.
+Likewise, a perfectly valid JSON schema does not guarantee meaningful content.
+
+For product design, this decomposition enables targeted interventions:
+- Semantic failures → retrieval/prompt/model interventions
+- Structural failures → format template and rendering interventions
+- Operational failures → schema enforcement and post-processing interventions
+
+#### 2.3.3 Three enforcement mechanisms
+
+Output formatting can be enforced through three mechanisms, each with different reliability/cost tradeoffs.
+
+**Prompt-only enforcement.**
+The prompt instructs the model to produce a specified structure (e.g., "Use headings: Summary, Evidence, References").
+
+Advantages:
+- Fast to implement
+- No additional infrastructure
+- Flexible to iterate
+
+Limitations:
+- No hard guarantees
+- Sensitive to prompt drift and model updates
+- High variance across runs for complex formats
+
+Prompt-only enforcement is suitable for low-stakes formatting constraints (e.g., preferred tone, optional section order) but fragile for contractual outputs.
+
+**Post-processing enforcement.**
+The model output is transformed after generation: citations normalized, references deduplicated, missing sections inserted, ordering standardized.
+
+Advantages:
+- Deterministic normalization
+- Can repair common formatting failures
+- Reduces run-to-run variance
+
+Limitations:
+- Repair logic must be maintained
+- Limited ability to recover missing semantic content
+- Risk of over-correction if parser assumptions are brittle
+
+Arxie uses post-processing for citation normalization and references rendering.
+This reduced formatting variance materially without changing model weights.
+
+**Schema-constrained generation.**
+The model is required to emit a structured object (e.g., JSON schema with required fields).
+
+Advantages:
+- Strongest structural guarantees
+- Directly compatible with downstream systems
+- Easier automated testing
+
+Limitations:
+- Increased prompt/tooling complexity
+- Potential reduction in expressive flexibility
+- Model/provider support varies
+
+For high-stakes product paths (programmatic consumption, compliance workflows), schema-constrained generation is usually the only defensible option.
+
+A practical PM rule:
+- If format errors are recoverable and low-cost → prompt-only or lightweight post-processing
+- If format errors break workflows or trust → schema constraints + deterministic post-processing
+
+#### 2.3.4 Citation formatting as trust infrastructure
+
+In research products, citations are not ornamental.
+They are the primary mechanism through which users audit claims.
+Formatting decisions therefore affect epistemic trust directly.
+
+A useful citation architecture contains three elements:
+
+1. **Local evidence links (inline citations).**
+Each non-trivial claim should be locally anchored with citation tokens (e.g., Author et al., Year).
+Without local anchors, users must infer which evidence supports which claim.
+
+2. **Global source index (references section).**
+All cited works must be listed in a stable format with sufficient identifiers (DOI, arXiv ID, paperId) for retrieval.
+Without global indexing, inline citations become unverifiable labels.
+
+3. **Provenance metadata (operational layer).**
+For system-level auditing, each citation should map to source metadata and retrieval events (where available).
+This supports debugging when citations appear inconsistent or stale.
+
+Arxie's output design evolved along this path:
+- Phase 1: free-text with occasional citations
+- Phase 2: mandatory inline citations + references section
+- Phase 3 (in progress): structured citation objects in machine-readable output
+
+This progression reflects a general maturity pattern:
+as products move from interactive exploration toward professional workflows, citation format must shift from human-readable convention to machine-auditable contract.
+
+#### 2.3.5 Failure modes and product consequences
+
+Output formatting failures should be classified by business impact, not only technical severity.
+
+**Citation drift.**
+A citation appears near a claim but actually supports a different statement.
+Consequence: users over-trust unsupported claims.
+
+**Orphan claims.**
+Substantive claims appear without evidence anchors.
+Consequence: verification cost increases; trust decreases.
+
+**Reference hallucination.**
+References list contains non-existent or mismatched sources.
+Consequence: catastrophic trust failure in academic contexts.
+
+**Schema breakage.**
+Required fields omitted or renamed in machine-readable output.
+Consequence: integration failures, downstream pipeline crashes.
+
+**Intra-run inconsistency.**
+The same entity is formatted differently within one response (e.g., two citation styles).
+Consequence: perceived low quality and ambiguity.
+
+**Inter-run inconsistency.**
+Equivalent queries produce structurally different outputs across runs.
+Consequence: difficult automation and regression detection.
+
+PM response should map failure mode to action:
+- Trust-critical failures (reference hallucination, orphan claims in high-stakes mode) → hard release blockers
+- Workflow-critical failures (schema breakage) → integration blockers
+- Cosmetic inconsistencies → backlog unless they materially affect user behavior
+
+#### 2.3.6 PRD-level output contracts
+
+PRDs for AI products should define output contracts explicitly.
+A useful contract specification includes:
+
+**Required fields (operational):**
+- `answer`
+- `references[]`
+- `status`
+- `errors[]` (if applicable)
+
+**Recommended fields (trust + observability):**
+- `claims[]`
+- `citations[]`
+- `confidence` (if calibrated and validated)
+- `provenance` (source identifiers, retrieval metadata)
+
+**Behavioral constraints:**
+- Every non-trivial claim must have at least one citation
+- References must be deduplicated and resolvable
+- If evidence is insufficient, response must explicitly state limitations
+
+**Fallback behaviors:**
+- No-results state
+- Partial-results state
+- Retrieval-failure state
+
+**Versioning policy:**
+- Output schema versions must be backward-compatible for one deprecation window
+- Breaking changes require migration notes and parser updates
+
+This shifts output design from informal prompt wording to explicit product contract management.
+
+#### 2.3.7 Evaluation strategy for formatting quality
+
+Formatting quality requires dedicated evaluation metrics separate from semantic correctness.
+A minimal evaluation suite includes:
+
+**Schema adherence rate.**
+Fraction of responses that satisfy required schema fields/types.
+
+**Citation linkage precision.**
+Fraction of cited claims where citations correctly support the associated claim.
+
+**Orphan-claim rate.**
+Fraction of non-trivial claims without citations.
+
+**Reference resolvability rate.**
+Fraction of references that resolve to valid identifiers/sources.
+
+**Run-to-run format consistency.**
+Structural similarity across repeated runs on identical inputs.
+
+**Fallback correctness.**
+Fraction of failure scenarios where output uses the correct failure schema/state.
+
+These metrics should run in CI alongside semantic evaluation.
+A common anti-pattern is to evaluate format manually during development and only automate semantic tests.
+This creates regression risk: minor prompt changes can silently degrade structural reliability while semantic scores remain stable.
+
+For Arxie, formatting regression tests should be tied to both prompt and tool-description changes, since both can alter output structure indirectly.
+
+#### 2.3.8 Summary
+
+Output formatting is where model capability becomes product value.
+An AI system that is semantically strong but structurally inconsistent is difficult to trust and difficult to integrate.
+
+The core design principles are:
+1. Treat output format as an interface contract
+2. Separate semantic, structural, and operational concerns
+3. Choose enforcement mechanism by failure cost
+4. Design citations as trust infrastructure, not presentation detail
+5. Classify format failures by product impact
+6. Encode output contracts explicitly in the PRD
+7. Evaluate formatting quality with dedicated, automated metrics
+
+The next section addresses context window budget management, where formatting decisions intersect directly with token allocation and latency/cost constraints.
+
+### 2.4–2.6 (Chapter outline)
 
 The remaining sections of this chapter will address:
 
-- **2.3 Output formatting as product design** — structured output (citations, confidence, sections) via prompt + post-processing; when to use prompt instructions vs. output parsers vs. structured generation; Arxie case: citation formatting achieved 86% compliance from prompts alone, reaching 98% with post-processing.
 - **2.4 Context window budget management** — allocating tokens across system prompt, retrieved content, conversation history, and tool-call accumulation; the compounding cost of multi-turn ReAct agents; Arxie case: context budget allocation for standard vs. deep query modes.
 - **2.5 The prompt engineering ceiling** — what prompts can fix (format, instruction following, tool routing) vs. what they can't (reasoning gaps, domain knowledge, verification); the decision framework for when to move to fine-tuning (Chapter 3).
 - **2.6 Feature scoping at the prompt layer** — which product features are prompt-level changes vs. system-level changes vs. architecture changes; Arxie case: citation formatting (prompt fix), hallucination prevention (system fix), full-text analysis (architecture addition).
