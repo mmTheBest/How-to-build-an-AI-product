@@ -1860,16 +1860,295 @@ The core design principles are:
 
 The next section addresses context window budget management, where formatting decisions intersect directly with token allocation and latency/cost constraints.
 
-### 2.4–2.6 (Chapter outline)
+### 2.4 Context window budget management
+
+Context engineering is constrained by a finite resource: tokens.
+Every instruction, tool definition, retrieved passage, intermediate trace, and generated response competes for space in the model context window and for inference budget.
+For agentic systems, this is not a secondary optimization issue.
+It is a core product design constraint that determines quality, latency, and cost simultaneously.
+
+In conventional software systems, memory management is largely invisible to product management.
+In LLM systems, context allocation is directly tied to user-facing outcomes.
+If too few tokens are allocated to retrieved evidence, answer quality degrades.
+If too many tokens are allocated to retrieval traces and tool logs, latency and cost increase non-linearly.
+If system instructions are too long, critical evidence is pushed out of context.
+
+For this reason, context budgeting should be treated as a first-class product mechanism with explicit design rules, operational limits, and measurement.
+
+#### 2.4.1 The context budget as an optimization problem
+
+For each query, an agent must allocate a fixed token budget across competing components:
+
+\[
+B = B_{sys} + B_{tools} + B_{user} + B_{history} + B_{retrieval} + B_{scratch} + B_{output}
+\]
+
+Where:
+- \(B_{sys}\): system prompt tokens
+- \(B_{tools}\): tool schema/description tokens
+- \(B_{user}\): user query tokens
+- \(B_{history}\): conversation history tokens
+- \(B_{retrieval}\): retrieved evidence tokens
+- \(B_{scratch}\): intermediate reasoning / tool traces
+- \(B_{output}\): generated response tokens
+
+Even with large-context models, this allocation remains binding because cost and latency scale with total processed tokens.
+In multi-turn agent loops, total processed tokens are often much larger than the maximum instantaneous window due to repeated re-ingestion of prior context.
+
+A practical optimization objective is:
+
+\[
+\max \text{AnswerUtility}(B_{retrieval}, B_{output}) \quad \text{s.t.} \quad
+\text{Latency}_{p95} \leq L_{max}, \ \text{Cost/query} \leq C_{max}
+\]
+
+This explicitly frames context allocation as a constrained product optimization problem, not an engineering afterthought.
+
+#### 2.4.2 Why token costs compound in agent loops
+
+A common early-stage mistake is estimating token cost from the final prompt only.
+This underestimates cost and latency for ReAct-style agents.
+
+In a single-pass chatbot, one request and one response dominate cost.
+In an agent loop, each iteration includes:
+1. Previous messages
+2. Tool invocation instructions
+3. Tool output observations
+4. New model reasoning and next action
+
+Thus, iteration \(t\) reprocesses most of \(t-1\) plus new content.
+For a query requiring five tool calls, total processed input tokens may be 3–10× the apparent "final context size."
+
+In Arxie, deep literature queries often follow this pattern:
+- Turn 1: search papers
+- Turn 2: inspect paper details
+- Turn 3: fetch citations / full text sections
+- Turn 4: compare evidence
+- Turn 5: synthesize final answer with references
+
+If each turn adds 1,000–2,000 tokens of observations and prior turns are retained verbatim, cumulative input tokens increase super-linearly.
+This is the primary driver of unexpected cost spikes in agentic products.
+
+Product implication: **query complexity tiers must be part of the PRD and pricing model.**
+A flat cost assumption per query is structurally wrong for agent workflows.
+
+#### 2.4.3 Arxie budget decomposition
+
+Arxie currently operates with the following approximate token composition per standard query:
+
+| Component | Typical Tokens |
+|-----------|----------------|
+| System prompt | 250–350 |
+| Tool definitions | 700–900 |
+| User query | 30–150 |
+| Retrieval snippets (2–5 papers) | 800–2,500 |
+| Intermediate traces | 300–1,500 |
+| Output | 250–800 |
+| **Total processed (single pass equivalent)** | **2,300–6,200** |
+
+For deep multi-hop queries, total processed tokens across turns can exceed 15,000–40,000, depending on tool-call depth and full-text usage.
+
+Two observations follow:
+1. Tool definitions are a fixed tax per call. This reinforces Section 2.2: verbose tool schemas consume persistent budget and should be justified by measurable routing gains.
+2. Retrieval snippets dominate variable cost. Retrieval quality and compression strategy have higher leverage on cost/latency than small prompt edits.
+
+#### 2.4.4 Budget policies: fixed, adaptive, and tiered
+
+Three policy families are commonly used.
+
+**Fixed budget policy.**
+A single cap is applied to all queries (e.g., max 4,000 input tokens, max 600 output tokens).
+
+Advantages:
+- Simple to reason about
+- Predictable cost envelope
+
+Limitations:
+- Under-allocates complex queries
+- Over-allocates simple queries
+- Degrades either quality or efficiency depending on chosen cap
+
+Suitable for MVPs and low-variance workloads.
+
+**Adaptive budget policy.**
+Budget is adjusted dynamically from query features (query length, ambiguity, detected task type, retrieval confidence).
+
+Advantages:
+- Better cost-quality tradeoff
+- Higher efficiency across heterogeneous workloads
+
+Limitations:
+- Requires complexity estimator
+- Harder to debug and explain
+
+Suitable once telemetry is available.
+
+**Tiered policy.**
+Discrete modes with explicit product semantics (e.g., "Quick answer" vs. "Deep research").
+
+Advantages:
+- User-visible control over quality/cost/latency
+- Simpler than full adaptivity
+- Enables clear SLAs per mode
+
+Limitations:
+- Requires good mode defaults
+- Risk of user confusion if differences are unclear
+
+Arxie should use tiered policy as default:
+- **Standard mode**: fast synthesis from abstracts/metadata, limited tool depth
+- **Deep mode**: full-text section retrieval, broader citation chasing, larger output allowance
+
+This aligns model behavior with user expectations and with business cost controls.
+
+#### 2.4.5 Retrieval compression and evidence selection
+
+Increasing retrieval tokens improves factual grounding only up to a point.
+Beyond that point, marginal evidence quality declines while token cost and distraction increase.
+
+Effective context budgeting therefore requires evidence compression policies:
+
+1. **Relevance-first truncation.** Rank passages by semantic relevance and keep top-k under token cap.
+2. **Field-aware extraction.** Include abstract/methods/results snippets rather than full paper text by default.
+3. **Redundancy suppression.** Remove near-duplicate evidence across papers.
+4. **Citation-prioritized retention.** Retain passages with high citation utility (clear claims, methods, quantitative results).
+
+Arxie's `read_paper_fulltext` already extracts structured sections (abstract, methods, results, discussion, conclusion).
+This is a strong compression primitive: section extraction reduces raw full-text load while preserving semantically critical evidence.
+
+A practical PM heuristic:
+- If task requires broad survey → prioritize abstract + conclusion snippets across many papers
+- If task requires method critique → prioritize methods + results from fewer papers
+
+The same token budget can support different evidence strategies depending on user intent.
+
+#### 2.4.6 Conversation history management
+
+Multi-turn memory competes directly with evidence budget.
+In long sessions, retaining full history can displace retrieval context and degrade answer grounding.
+
+History policies:
+
+**Full retention.** Keep all prior turns.
+- High coherence
+- Rapid token growth
+- Poor scalability
+
+**Windowed retention.** Keep last N turns.
+- Predictable token usage
+- Risk of losing long-range constraints
+
+**Summarized retention.** Periodically summarize prior turns into compact state.
+- Strong token control
+- Summary quality risk (loss or distortion)
+
+For research assistants, summarized retention is typically superior when paired with explicit state fields:
+- Active question
+- Included/accepted sources
+- Excluded sources
+- Outstanding uncertainties
+- Formatting constraints
+
+This preserves decision-critical context while controlling growth.
+
+#### 2.4.7 Output budget and structural tradeoffs
+
+Output tokens are often treated as a residual budget.
+This is a mistake in products where output structure is part of the trust mechanism.
+
+In Arxie, references, caveats, and evidence-linked claims are not optional verbosity.
+If output caps are too low, these sections are truncated first, causing trust regressions even when core answer text is intact.
+
+Therefore output budgeting should reserve structural minima:
+- Minimum citation slots
+- Minimum references section capacity
+- Minimum uncertainty/caveat space for low-evidence cases
+
+A practical output policy:
+1. Reserve fixed tokens for structure (references + caveat fields)
+2. Allocate remainder to narrative synthesis
+3. If remaining budget is insufficient, reduce narrative length before dropping evidence structures
+
+This enforces product priorities under tight budgets.
+
+#### 2.4.8 Latency and concurrency implications
+
+Context budgeting affects not only per-query latency but system throughput.
+Higher token loads increase model inference time and can reduce effective concurrency under provider rate limits.
+
+Given arrival rate \(\lambda\) and mean service time \(W\), concurrency load follows Little's Law (\(L = \lambda W\)). [Jain, 1991]
+If aggressive context budgets increase \(W\), the same traffic requires higher concurrency, increasing queueing delays and tail latency.
+
+Thus token budget decisions should be validated against p95 latency targets under projected traffic.
+This links context engineering directly to production readiness constraints (Chapter 1.9).
+
+For Arxie, deep mode should be treated as a bounded-capacity path:
+- lower allowed concurrency
+- explicit user feedback ("deep analysis may take longer")
+- optional asynchronous delivery for very large evidence sets
+
+#### 2.4.9 Budget observability and control loops
+
+Context budgeting must be instrumented.
+Without telemetry, budget policy becomes guesswork.
+
+Minimum metrics:
+- Input tokens by component (system/tools/history/retrieval)
+- Output tokens
+- Tool-call depth
+- Cost/query by mode
+- Latency by mode and complexity tier
+- Truncation events (which component was truncated)
+
+Control loop:
+1. Observe budget metrics and failure patterns
+2. Identify bottleneck (e.g., retrieval overrun, history bloat, output truncation)
+3. Adjust policy (caps, compression, mode defaults)
+4. Re-evaluate quality + latency + cost
+
+This loop should run continuously in production.
+Static budgets tuned on offline datasets drift as user behavior changes.
+
+#### 2.4.10 PRD requirements for context budgeting
+
+A robust PRD should include explicit context budget requirements:
+
+- **Per-mode token caps** (input/output)
+- **Maximum tool depth** by mode
+- **History retention policy** (windowed/summarized)
+- **Evidence selection policy** (section-level, top-k, dedup)
+- **Structural output minima** (references/citations/caveats)
+- **Latency and cost targets per mode**
+- **Fallback behavior when caps are hit** (summarize, ask follow-up, switch to async)
+
+This prevents implicit budget assumptions from leaking into production behavior.
+
+#### 2.4.11 Summary
+
+Context window management is the mechanism through which AI products trade off quality, speed, and cost.
+For agentic systems, token usage compounds across tool loops, making budget policy a central product decision.
+
+The core principles:
+1. Treat context allocation as constrained optimization, not prompt tuning
+2. Model cumulative token costs across agent turns
+3. Use tiered or adaptive budgets for heterogeneous query complexity
+4. Prioritize evidence compression over indiscriminate truncation
+5. Reserve output budget for trust-critical structure
+6. Instrument token flows and run a continuous policy control loop
+7. Encode budgeting rules explicitly in the PRD
+
+The next section examines the prompt engineering ceiling: where context and instruction design stop delivering returns and model customization becomes necessary.
+
+### 2.5–2.6 (Chapter outline)
 
 The remaining sections of this chapter will address:
 
-- **2.4 Context window budget management** — allocating tokens across system prompt, retrieved content, conversation history, and tool-call accumulation; the compounding cost of multi-turn ReAct agents; Arxie case: context budget allocation for standard vs. deep query modes.
 - **2.5 The prompt engineering ceiling** — what prompts can fix (format, instruction following, tool routing) vs. what they can't (reasoning gaps, domain knowledge, verification); the decision framework for when to move to fine-tuning (Chapter 3).
 - **2.6 Feature scoping at the prompt layer** — which product features are prompt-level changes vs. system-level changes vs. architecture changes; Arxie case: citation formatting (prompt fix), hallucination prevention (system fix), full-text analysis (architecture addition).
 
 ### References (Chapter 2)
 
+- Jain, R. (1991). *The Art of Computer Systems Performance Analysis: Techniques for Experimental Design, Measurement, Simulation, and Modeling*. Wiley.
 - Ouyang, L., Wu, J., Jiang, X., et al. (2022). Training Language Models to Follow Instructions with Human Feedback. *NeurIPS*.
 - Rabanser, S., Kapoor, S., Kirgis, P., Liu, K., Utpala, S., & Narayanan, A. (2026). Towards a Science of AI Agent Reliability. *arXiv:2602.16666*.
 - Reynolds, L., & McDonell, K. (2021). Prompt Programming for Large Language Models: Beyond the Few-Shot Paradigm. *CHI Extended Abstracts*.
