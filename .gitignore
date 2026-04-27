@@ -2,4 +2,6 @@
 .DS_Store
 docs/plans/
 excalidraw.log
+AGENTS.md
+notes/
 notes/inbox/*.md
