@@ -1,3 +1,5 @@
 .worktrees/
 .DS_Store
 docs/plans/
+excalidraw.log
+notes/inbox/*.md
